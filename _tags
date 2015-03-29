@@ -1,0 +1,42 @@
+# OASIS_START
+# DO NOT EDIT (digest: a5643a3d29e566c17477008a52266df3)
+# Ignore VCS directories, you can use the same kind of rule outside
+# OASIS_START/STOP if you want to exclude directories that contains
+# useless stuff for the build process
+true: annot, bin_annot
+<**/.svn>: -traverse
+<**/.svn>: not_hygienic
+".bzr": -traverse
+".bzr": not_hygienic
+".hg": -traverse
+".hg": not_hygienic
+".git": -traverse
+".git": not_hygienic
+"_darcs": -traverse
+"_darcs": not_hygienic
+# Library HardCamlZinc
+"src/HardCamlZinc.cmxs": use_HardCamlZinc
+"src/instr.cmx": for-pack(HardCamlZinc)
+"src/load.cmx": for-pack(HardCamlZinc)
+<src/*.ml{,i,y}>: pkg_compiler-libs.bytecomp
+<src/*.ml{,i,y}>: pkg_deriving.syntax
+<src/*.ml{,i,y}>: pkg_hardcaml
+<src/*.ml{,i,y}>: pkg_hardcaml.syntax
+# Executable simple
+"test/simple.byte": pkg_compiler-libs.bytecomp
+"test/simple.byte": pkg_deriving.syntax
+"test/simple.byte": pkg_hardcaml
+"test/simple.byte": pkg_hardcaml.syntax
+"test/simple.byte": use_HardCamlZinc
+# Executable hardcamlrun
+"test/hardcamlrun.byte": pkg_compiler-libs.bytecomp
+"test/hardcamlrun.byte": pkg_deriving.syntax
+"test/hardcamlrun.byte": pkg_hardcaml
+"test/hardcamlrun.byte": pkg_hardcaml.syntax
+"test/hardcamlrun.byte": use_HardCamlZinc
+<test/*.ml{,i,y}>: pkg_compiler-libs.bytecomp
+<test/*.ml{,i,y}>: pkg_deriving.syntax
+<test/*.ml{,i,y}>: pkg_hardcaml
+<test/*.ml{,i,y}>: pkg_hardcaml.syntax
+<test/*.ml{,i,y}>: use_HardCamlZinc
+# OASIS_STOP

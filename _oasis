@@ -1,0 +1,40 @@
+OASISFormat: 0.4
+Name:        hardcaml-zinc
+Version:     0.1
+Synopsis:    ZINC stack machine in HardCaml
+Description: A hardware implementation of the OCaml
+  ZINC stack machine
+
+Authors:     Andy Ray
+Maintainers: Andy Ray <andy.ray@ujamjar.com>
+Homepage:    https://github.com/ujamjar/hardcaml-zinc
+License:     ISC
+Plugins:     META (0.4)
+BuildTools:  ocamlbuild
+
+Library HardCamlZinc
+  Path:          src
+  Findlibname:   hardcaml-zinc
+  Pack:          true
+  Modules:       Instr, Load
+  BuildDepends:  compiler-libs.bytecomp, hardcaml, hardcaml.syntax, deriving.syntax
+  XMETARequires: compiler-libs.bytecomp, hardcaml
+
+Executable simple
+  Path:               test
+  MainIs:             simple.ml
+  CompiledObject:     byte
+  Install:            false
+  BuildDepends:       hardcaml-zinc
+
+Executable hardcamlrun
+  Path:               test
+  MainIs:             hardcamlrun.ml
+  CompiledObject:     byte
+  Install:            false
+  BuildDepends:       hardcaml-zinc
+
+SourceRepository master
+  Type:     git
+  Location: https://github.com/ujamjar/hardcaml-zinc.git
+  Browser:  https://github.com/ujamjar/hardcaml-zinc

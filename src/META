@@ -1,0 +1,12 @@
+# OASIS_START
+# DO NOT EDIT (digest: d3475b74702423ba5d7a55a98a454ec0)
+version = "0.1"
+description = "ZINC stack machine in HardCaml"
+requires = "compiler-libs.bytecomp hardcaml"
+archive(byte) = "HardCamlZinc.cma"
+archive(byte, plugin) = "HardCamlZinc.cma"
+archive(native) = "HardCamlZinc.cmxa"
+archive(native, plugin) = "HardCamlZinc.cmxs"
+exists_if = "HardCamlZinc.cma"
+# OASIS_STOP
+
