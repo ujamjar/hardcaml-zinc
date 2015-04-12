@@ -1,5 +1,5 @@
 # OASIS_START
-# DO NOT EDIT (digest: a5643a3d29e566c17477008a52266df3)
+# DO NOT EDIT (digest: 2744614286f7804ee266e1da7b0ad455)
 # Ignore VCS directories, you can use the same kind of rule outside
 # OASIS_START/STOP if you want to exclude directories that contains
 # useless stuff for the build process
@@ -16,27 +16,47 @@ true: annot, bin_annot
 "_darcs": not_hygienic
 # Library HardCamlZinc
 "src/HardCamlZinc.cmxs": use_HardCamlZinc
+"src/arbiter.cmx": for-pack(HardCamlZinc)
 "src/instr.cmx": for-pack(HardCamlZinc)
 "src/load.cmx": for-pack(HardCamlZinc)
+"src/state.cmx": for-pack(HardCamlZinc)
+"src/zinc.cmx": for-pack(HardCamlZinc)
+"src/framework.cmx": for-pack(HardCamlZinc)
 <src/*.ml{,i,y}>: pkg_compiler-libs.bytecomp
 <src/*.ml{,i,y}>: pkg_deriving.syntax
 <src/*.ml{,i,y}>: pkg_hardcaml
+<src/*.ml{,i,y}>: pkg_hardcaml-examples
+<src/*.ml{,i,y}>: pkg_hardcaml-llvmsim
+<src/*.ml{,i,y}>: pkg_hardcaml-waveterm.lterm
 <src/*.ml{,i,y}>: pkg_hardcaml.syntax
 # Executable simple
-"test/simple.byte": pkg_compiler-libs.bytecomp
-"test/simple.byte": pkg_deriving.syntax
-"test/simple.byte": pkg_hardcaml
-"test/simple.byte": pkg_hardcaml.syntax
-"test/simple.byte": use_HardCamlZinc
 # Executable hardcamlrun
-"test/hardcamlrun.byte": pkg_compiler-libs.bytecomp
-"test/hardcamlrun.byte": pkg_deriving.syntax
-"test/hardcamlrun.byte": pkg_hardcaml
-"test/hardcamlrun.byte": pkg_hardcaml.syntax
-"test/hardcamlrun.byte": use_HardCamlZinc
+<test/hardcamlrun.{native,byte}>: pkg_compiler-libs.bytecomp
+<test/hardcamlrun.{native,byte}>: pkg_deriving.runtime
+<test/hardcamlrun.{native,byte}>: pkg_deriving.syntax
+<test/hardcamlrun.{native,byte}>: pkg_hardcaml
+<test/hardcamlrun.{native,byte}>: pkg_hardcaml-examples
+<test/hardcamlrun.{native,byte}>: pkg_hardcaml-llvmsim
+<test/hardcamlrun.{native,byte}>: pkg_hardcaml-waveterm.lterm
+<test/hardcamlrun.{native,byte}>: pkg_hardcaml.syntax
+<test/hardcamlrun.{native,byte}>: use_HardCamlZinc
+# Executable codes
+<test/codes.{native,byte}>: pkg_compiler-libs.bytecomp
+<test/codes.{native,byte}>: pkg_deriving.runtime
+<test/codes.{native,byte}>: pkg_deriving.syntax
+<test/codes.{native,byte}>: pkg_hardcaml
+<test/codes.{native,byte}>: pkg_hardcaml-examples
+<test/codes.{native,byte}>: pkg_hardcaml-llvmsim
+<test/codes.{native,byte}>: pkg_hardcaml-waveterm.lterm
+<test/codes.{native,byte}>: pkg_hardcaml.syntax
+<test/codes.{native,byte}>: use_HardCamlZinc
 <test/*.ml{,i,y}>: pkg_compiler-libs.bytecomp
+<test/*.ml{,i,y}>: pkg_deriving.runtime
 <test/*.ml{,i,y}>: pkg_deriving.syntax
 <test/*.ml{,i,y}>: pkg_hardcaml
+<test/*.ml{,i,y}>: pkg_hardcaml-examples
+<test/*.ml{,i,y}>: pkg_hardcaml-llvmsim
+<test/*.ml{,i,y}>: pkg_hardcaml-waveterm.lterm
 <test/*.ml{,i,y}>: pkg_hardcaml.syntax
 <test/*.ml{,i,y}>: use_HardCamlZinc
 # OASIS_STOP

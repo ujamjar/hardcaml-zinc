@@ -16,23 +16,32 @@ Library HardCamlZinc
   Path:          src
   Findlibname:   hardcaml-zinc
   Pack:          true
-  Modules:       Instr, Load
-  BuildDepends:  compiler-libs.bytecomp, hardcaml, hardcaml.syntax, deriving.syntax
-  XMETARequires: compiler-libs.bytecomp, hardcaml
+  Modules:       Arbiter, Instr, Load, State, Zinc, Framework
+  BuildDepends:  compiler-libs.bytecomp, 
+    hardcaml, hardcaml-waveterm.lterm, hardcaml-llvmsim, hardcaml-examples, 
+    hardcaml.syntax, deriving.syntax
+  XMETARequires: compiler-libs.bytecomp, 
+    hardcaml, hardcaml-waveterm.lterm, hardcaml-llvmsim, hardcaml-examples
 
 Executable simple
   Path:               test
   MainIs:             simple.ml
   CompiledObject:     byte
   Install:            false
-  BuildDepends:       hardcaml-zinc
 
 Executable hardcamlrun
   Path:               test
   MainIs:             hardcamlrun.ml
-  CompiledObject:     byte
+  CompiledObject:     best
   Install:            false
-  BuildDepends:       hardcaml-zinc
+  BuildDepends:       hardcaml-zinc, deriving.runtime
+
+Executable codes
+  Path:               test
+  MainIs:             codes.ml
+  CompiledObject:     best
+  Install:            false
+  BuildDepends:       hardcaml-zinc, deriving.runtime
 
 SourceRepository master
   Type:     git
