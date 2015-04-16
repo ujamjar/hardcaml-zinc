@@ -4,10 +4,12 @@ open Printf
 open HardCamlZinc
 
 let bytecode_filename = ref ""
+let waves = ref false
 
 let () = Arg.parse
   [
     "-i", Arg.Set_string bytecode_filename, " bytecode executable";
+    "-waves", Arg.Set waves, " waveform viewer";
   ]
   (fun _ -> ())
   "hardcamlrun (c) 2015 MicroJamJar Ltd"
@@ -23,5 +25,5 @@ let () =
   printf "prims = %i\n" (List.length bytecode.prim);
   printf "**********************************\n\n"
 
-let _ = Framework.make bytecode
+let _ = Framework.make !waves bytecode
 

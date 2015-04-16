@@ -40,7 +40,7 @@ let init_memory bc memory_size_words =
   let stack_address = memory_size_words in
   memory, code_address, atoms_address, globals_address, heap_address, stack_address
 
-let make exe = 
+let make waves exe = 
 
   let mem_size_words = 1024*1024 in
 
@@ -49,7 +49,9 @@ let make exe =
     let min_ins, max_ins = Bounded.min_bound<opcodes>, Bounded.max_bound<opcodes> in
     let ins = Enum.enum_from_to<opcodes> min_ins max_ins in
     let ins = List.map Show.show<opcodes> ins |> Array.of_list in
-    (fun x -> try ins.(B.to_int x) with _ -> "")
+    (fun x -> 
+      let i = B.to_int x in
+      try ins.(i) with _ -> "")
   in
 
   let wave_cfg = 
@@ -63,11 +65,17 @@ let make exe =
        "pc",Waveterm_waves.U;
        "instruction",Waveterm_waves.F show_instr] @
       Zinc.I.(to_list @@ map f t) @ 
-      Zinc.O.(to_list @@ map f t) )
+      Zinc.O.(to_list @@ map f t) @
+      List.map (fun s -> s,Waveterm_waves.U) ["nfuncs"; "nvars"; "count"; "count_next" ])
   in
 
   let circ, sim, i, o, n = Z.make "zinc" Zinc.zinc in
-  let sim, waves = Waveterm_sim.wrap ?cfg:wave_cfg sim in
+  let sim, waves = 
+    if waves then 
+      let sim, waves = Waveterm_sim.wrap ?cfg:wave_cfg sim in
+      sim, Some(waves)
+    else sim, None
+  in
 
   let open Zinc.Memory.I in
   let open Zinc.Memory.O in
@@ -80,6 +88,42 @@ let make exe =
 
   let memory, bytecode_address, atom_table_address, globals_address, heap_address, stack_address = 
     init_memory exe mem_size_words
+  in
+
+  let trace =
+    let open Int64 in
+
+    (* bytecode program address and size in bytes *)
+    let bytecode_address = of_int (bytecode_address * 8) in
+    let bytecode_size = of_int (Array.length exe.Load.code * 4) in
+
+    let is_int v = (logand v 1L) <> 0L in
+    let is_block v = not (is_int v) in
+    let in_program v = 
+      (rem v 4L = 0L) && v >= bytecode_address && v < (add bytecode_address bytecode_size)
+    in
+    let header v = memory.(((to_int v) / 8)-1) in
+    let field v i = memory.(((to_int v) / 8)+i) in
+    let tag v = logand v 0xFFL in
+    let size v = shift_right_logical v 10 in
+    let codeofs v = div (sub v bytecode_address) 4L in
+
+    let trace_val v = 
+      printf "0x%Lx" v;
+      if is_int v then printf "=long%Li" (shift_right v 1)
+      else if in_program v then printf "=code%Li" (codeofs v)
+      else if is_block v then begin
+        let h = header v in
+        let tag, size = tag h, size h in
+        if to_int tag = Instr.closure_tag then 
+          printf "=closure[s%Li,cod%Li]" size (codeofs (field v 0))
+        else 
+          printf "=block<T%Li/s%Li>" tag size
+      end else printf "=unknown???"
+    in
+    (fun () ->
+      printf "accu="; trace_val o.accu#i64; printf "\n";
+      printf "env="; trace_val o.env#i64; printf "\n")
   in
 
   S.reset sim;
@@ -103,37 +147,50 @@ let make exe =
       cycle (if rw=0 then "R" else "W") typ addr offs data sp
   in
 
-  let cycle = ref 0 in
-  while o.error#i <> 1 do
-    if o.state#i = 2 then begin
-      try
-        printf "      %s\n" 
-          (Show.show<Instr.opcodes> 
-            (Enum.to_enum<Instr.opcodes> o.instruction#i));
-      with _ -> 
-        printf "      INVALID\n"
-    end;
-    S.cycle sim;
-    i.memory_i.memory_ready#i 0;
-    if n.memory_o.memory_request#i <> 0 then begin
-      let addr = n.memory_o.memory_address#i in
-      let rw = n.memory_o.memory_read_write#i in
-      let sp = o.sp#i in
-      if rw=0 then begin (* read *)
-        let data = memory.(addr lsr 3) in
-        log_mem_access !cycle rw addr data sp;
-        i.memory_i.memory_data_in#i64 data;
-      end else begin (* write *)
-        let data = n.memory_o.memory_data_out#i64 in
-        log_mem_access !cycle rw addr data sp;
-        memory.(addr lsr 3) <- data;
+  let run () = 
+    let cycle = ref 0 in
+    let stop = ref false in
+    while not !stop && o.error#i <> 1 do
+      if o.state#i = 2 then begin
+        try
+          printf "      %s\n" 
+            (Show.show<Instr.opcodes> 
+              (Enum.to_enum<Instr.opcodes> o.instruction#i));
+          trace ();
+        with _ -> begin
+          stop := true;
+          printf "      INVALID\n"
+        end
       end;
-      i.memory_i.memory_ready#i 1;
-    end;
-    
-    i.start#i 0;
-    incr cycle;
-  done;
-  
-  Lwt_main.run (Waveterm_ui.run Waveterm_waves.({ cfg=default; waves }))
+      S.cycle sim;
+      i.memory_i.memory_ready#i 0;
+      if n.memory_o.memory_request#i <> 0 then begin
+        let addr = n.memory_o.memory_address#i in
+        let rw = n.memory_o.memory_read_write#i in
+        let sp = o.sp#i in
+        if rw=0 then begin (* read *)
+          let data = memory.(addr lsr 3) in
+          log_mem_access !cycle rw addr data sp;
+          i.memory_i.memory_data_in#i64 data;
+        end else begin (* write *)
+          let data = n.memory_o.memory_data_out#i64 in
+          log_mem_access !cycle rw addr data sp;
+          memory.(addr lsr 3) <- data;
+        end;
+        i.memory_i.memory_ready#i 1;
+      end;
+      
+      i.start#i 0;
+      incr cycle;
+    done
+  in
+  let () = try run () with _ -> printf "\n\n!!!EXCEPTION!!!\n\n%!" in
+ 
+  begin
+    match waves with
+    | None -> ()
+    | Some(waves) ->
+      Lwt_main.run (Waveterm_ui.run Waveterm_waves.({ cfg=default; waves }))
+  end
+
 

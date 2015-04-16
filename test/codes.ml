@@ -4,7 +4,7 @@ open HardCamlZinc
 
 let mk_exe code = { Load.empty with Load.code = Instr.to_array code }
 
-let run code = Framework.make (mk_exe code)
+let run code = Framework.make true (mk_exe code)
 
 let () = 
   let open Instr in
