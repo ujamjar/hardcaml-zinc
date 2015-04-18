@@ -9,7 +9,7 @@ type bytecode_exe =
     dplt : string;
     dlls : string;
     code : Int32.t array;
-    prim : string list;
+    prim : string array;
     data : string;
     symb : Ident.t numtable option (* XXX err - numtable is not exposed in compiler-libs *)
   }

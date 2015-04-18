@@ -10,7 +10,7 @@ type bytecode_exe =
     dplt : string;
     dlls : string;
     code : Int32.t array;
-    prim : string list;
+    prim : string array;
     data : string;
     symb : Ident.t numtable option (* XXX err - numtable is not exposed in compiler-libs *)
   }
@@ -22,7 +22,7 @@ let empty =
     dplt = "";
     dlls = "";
     code = [||];
-    prim = [];
+    prim = [||];
     data = "";
     symb = None;
   }
@@ -35,7 +35,7 @@ let prims str =
     prims := (String.sub str !pos (i - !pos)) :: !prims;
     pos := i + 1
   done;
-  !prims
+  Array.of_list @@ List.rev !prims
 
 let byte_codes str = 
   let len = String.length str in
@@ -113,7 +113,7 @@ let get_data64 data base_word_offset =
         | None -> 
           let ptr = layout data.(i) in
           (* convert to pointer, offset by base *)
-          arr.( resv.(i) ) <- Int64.of_int ((base_word_offset + ptr) lsl 3) 
+          arr.( resv.(i) ) <- Int64.of_int ((base_word_offset + ptr + 1) lsl 3) 
       done;
       base
     end

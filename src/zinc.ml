@@ -3,6 +3,8 @@ open HardCaml
 open Signal.Comb
 
 let dbits = 64
+let bpw = dbits/8
+let asft = Utils.clog2 bpw
 
 (* gc colours *)
 let white = consti 2 Instr.white
@@ -118,7 +120,10 @@ module Decode = interface
   pop[1]
   assign[1]
   envacc[1] envacc_op
+  pushenvacc[1] pushenvacc_op
   apply[1] apply_op
+  appterm[1] appterm_op
+  grab[1]
   closure[1]
   closurerec[1]
   pushgetglobal[1] getglobal[1] 
@@ -150,6 +155,8 @@ module I = interface
   heap_start_address[dbits]
   stack_start_address[dbits]
   (memory_i : Memory.I)
+  c_call_ready[1]
+  c_call_result[dbits]
 end
 
 module O = interface
@@ -158,10 +165,13 @@ module O = interface
   sp[dbits]
   accu[dbits]
   env[dbits]
+  extra_args[dbits]
   instruction[8]
   error[1]
   (memory_o : Memory.O)
   (decode : Decode)
+  c_call_request[1]
+  c_call_prim[dbits]
 end
 
 type decinstr = { lte : t; gte : t; eq : t; range : t; }
@@ -199,12 +209,19 @@ let decode instr =
   let envacc = (sel ENVACC1).gte &: (sel ENVACC).lte in
   let envacc_op = (sel ENVACC1).range.[2:0] in
 
+  let pushenvacc = (sel PUSHENVACC1).gte &: (sel PUSHENVACC).lte in
+  let pushenvacc_op = (sel PUSHENVACC1).range.[2:0] in
+
   (* push_retaddr *)
 
   let apply = (sel APPLY).gte &: (sel APPLY3).lte in
   let apply_op = (sel APPLY).range.[1:0] in
 
-  (* return, reset, grab, closure, closurerec *)
+  let appterm = (sel APPTERM).gte &: (sel APPTERM3).lte in
+  let appterm_op = (sel APPTERM).range.[1:0] in
+
+  (* return, reset, grab *)
+  let grab = (sel GRAB).eq in
   let closure = (sel CLOSURE).eq in
   let closurerec = (sel CLOSUREREC).eq in
 
@@ -212,7 +229,6 @@ let decode instr =
 
   (* pushoffsetclosurem2, pushoffsetclosure0, pushoffsetclosure2, pushoffsetclosure *)
 
-  (* getglobal, pushgetglobal, getglobalfield, pushgetglobalfield, setglobal *)
   let pushgetglobal = (sel PUSHGETGLOBAL).eq in
   let getglobal = (sel GETGLOBAL).eq in
   let pushgetglobalfield = (sel PUSHGETGLOBALFIELD).eq in
@@ -262,7 +278,7 @@ let decode instr =
   let comp = (sel EQ).gte &: (sel GEINT).lte in
   let comp_op = (sel EQ).range.[2:0] in
   
-  (* offsetint, offsetref, isint, getmethod *)
+  (* offsetref, isint, getmethod *)
   let offsetint = (sel OFFSETINT).eq in
   
   let bcomp = (sel BEQ).gte &: (sel BGEINT).lte in
@@ -276,7 +292,7 @@ let decode instr =
   
   (* getpubmet, getdynmet *)
   
-  (* stop, event, break, reraise, raise_notrace *)
+  (* event, break, reraise, raise_notrace *)
   let stop = (sel STOP).eq in
 
   Decode.{ 
@@ -284,7 +300,10 @@ let decode instr =
     push; pushacc; push_op;
     pop; assign;
     envacc; envacc_op;
+    pushenvacc; pushenvacc_op;
     apply; apply_op;
+    appterm; appterm_op;
+    grab;
     closure;
     closurerec;
     pushgetglobal; getglobal; 
@@ -345,21 +364,24 @@ let ucomp_int op a b =
 
 type states = [ 
   `init | `fetch | `decode | 
-  `acc_set | `acc_offset | `pushacc | `pop | `constint |
-  `branch | `c_call |
+  `acc_set | `acc_offset | `pushacc | `envacc | `pop | `constint |
+  `branch | 
+  `c_call0 | `c_call1 | `c_call2 | `c_call3 |
   `alu | `comp | `ucomp | `bcomp | `bucomp | `bcomp_setpc |
   `closure_nfuncs | `closure_nvars | `closure_alloc | 
   `closure_var_start | `closure_var_read | `closure_var_write |
   `closure_func_start | `closure_func_hdr | `closure_func_pc | 
   `closure_func_wpc | `closure_func_stack | 
-  `closure_accu_pc0 | `closure_accu_pc |
+  `closure_accu_pc0 | `closure_accu_pc1 | `closure_accu_pc2 |
   `setglobal | `getglobal_data | `getglobal |
   `getglobalfield_data | `getglobalfield |
   `makeblock | `makeblock_alloc | `makeblock_accu | `makeblock_read | `makeblock_write |
   `offsetint |
   `atom |
   `apply_pop_stack | `apply_push_stack_env | `apply_push_stack_pc | 
-  `apply_push_stack_args | `apply |
+  `apply_push_stack_args | `apply_eargs | `apply |
+  `appterm_0 | `appterm_1 | `appterm_2 | `appterm_3 | `appterm_4 |
+  `grab |
   `invalid_instruction 
   ] deriving(Show, Enum, Bounded)
 
@@ -402,7 +424,7 @@ let zinc i =
   in
 
   let pc = Seq.g_reg ~e dbits in (* code pointer *)
-  let pc_next = pc#q +:. 1 in
+  let pc_next = pc#q +:. 4 in
   let sp = Seq.g_reg ~e dbits in (* stack pointer *)
   let accu = Seq.g_reg ~e dbits in (* accumulator *)
   let env = Seq.g_reg ~e dbits in (* heap-allocation environment *)
@@ -436,14 +458,16 @@ let zinc i =
     let e = e &: state.State.is `decode in
     Decode.map (Seq.reg ~e) decode
   in
-  (*let return = state.reg () in*)
 
+  let c_call_request = Seq.g_reg ~e 1 in
+  let c_call_prim = Seq.g_reg ~e dbits in
+    
   (* functions for accessing memory *)
   let open State in
   let access_memif mem_i mem_o = 
     let read addr nstate = 
       g_proc [
-        mem_o.memory_address $== sll addr 3; (* XXX 64/32 *)
+        mem_o.memory_address $== addr;
         mem_o.memory_request $==. 1;
         mem_o.memory_read_write $==. 0;
         state.next nstate;
@@ -451,7 +475,7 @@ let zinc i =
     in
     let write addr data nstate = 
       g_proc [
-        mem_o.memory_address $== sll addr 3; (* XXX 64/32 *)
+        mem_o.memory_address $== addr; 
         mem_o.memory_data_out $== data;
         mem_o.memory_request $==. 1;
         mem_o.memory_read_write $==. 1;
@@ -472,12 +496,12 @@ let zinc i =
   (* reading bytecode *)
   let read_bytecode, when_bytecode_ready = 
     let read, _, ready = access_memif bc_i bc_o in
-    let pc32 = srl pc#q 1 in
-    let pcsel = lsb pc#q in
+    let pcaddr = pc#q.[dbits-1:asft] @: zero asft in
+    let pcsel = pc#q.[2:2] in
     let read nstate = 
       g_proc [
         bc_sel $== pcsel; (* XXX 64/32 *)
-        read pc32 nstate;
+        read pcaddr nstate;
         pc $== pc_next;
       ]
     in
@@ -491,22 +515,23 @@ let zinc i =
   let alloc_block col tag words rstate = 
     g_proc [
       write_mem alloc_base#q (make_header words col tag) rstate;
-      alloc_base $== (alloc_base#q +: words +:. 1);
-      alloc_pointer $== alloc_base#q +:. 1; (* 1 past the header *)
+      alloc_base $== (alloc_base#q +: (sll (words +:. 1) asft));
+      alloc_pointer $== alloc_base#q +:. bpw; (* 1 past the header *)
     ];
   in
+  let alloc_pointer_next = alloc_pointer#q +:. bpw in
 
   (* read and write the stack *)
   let read_stack, write_stack, when_stack_ready = access_memif stack_i stack_o in
   let push_stack = 
-    let sp_next = sp#q -:. 1 in
+    let sp_next = sp#q -:. bpw in
     (fun data nstate -> g_proc [
       write_stack sp_next data nstate;
       sp $== sp_next;
     ])
   in
   let pop_stack =
-    let sp_next = sp#q +:. 1 in
+    let sp_next = sp#q +:. bpw in
     (fun nstate -> g_proc [
       read_stack sp#q nstate;
       sp $== sp_next;
@@ -514,31 +539,31 @@ let zinc i =
   in
   let push_stack_accu = push_stack accu#q in
 
-  let alloc_pointer_next = alloc_pointer#q +:. 1 in
-
   let closure_nfuncs = temp.(0) in
   let closure_nvars = temp.(1) in
   let closure_base_pc = temp.(2) in
-  let closure_nfuncs_offs = (sll (closure_nfuncs#q -- "nfuncs") 1) -:. 1 in
-  let closure_blksize = closure_nfuncs_offs +: (closure_nvars#q -- "nvars")  in
+  let closure_nfuncs_offs = 
+    mux2 decode'.closure (one dbits) 
+      ((sll (closure_nfuncs#q -- "nfuncs") 1) -:. 1) 
+  in
+  let closure_blksize = closure_nfuncs_offs +: closure_nvars#q in
 
   let makeblock_wosize = temp.(0) in
   let makeblock_accu_base = temp.(1) in
 
   (* XXX stack argument should maybe be registered??? *)
-  let alu_int = alu_int decode.alu_op accu#q stack_i.memory_data_in in
+  let alu_int = alu_int decode'.alu_op accu#q stack_i.memory_data_in in
   (* separate comp and bcomp as they take args in different orders.
    * I think we can optimise these functions so that these seperate
    * blocks are more efficient anyway *)
   let bcomp_int = (comp_int decode'.bcomp_op bc_i.memory_data_in accu#q).[1:1] in
   let bucomp_int = (ucomp_int decode'.bucomp_op bc_i.memory_data_in accu#q).[1:1] in
-  let comp_int = comp_int decode.comp_op accu#q stack_i.memory_data_in in
-  let ucomp_int = ucomp_int decode.ucomp_op accu#q stack_i.memory_data_in in
+  let comp_int = comp_int decode'.comp_op accu#q stack_i.memory_data_in in
+  let ucomp_int = ucomp_int decode'.ucomp_op accu#q stack_i.memory_data_in in
 
-  let to_ptr v = sll v 3 in
-  let to_code_ptr v = sll v 2 in
-  let of_ptr v = srl v 3 in
-  let atom_ptr tag = to_ptr (i.atom_table_address +: tag +:. 1) in
+  let atom_ptr tag = i.atom_table_address +: (sll tag asft) in
+  let aofs v = sll (uresize v dbits) 3 in
+  let bcofs v = sll (uresize v dbits) 2 in
 
   compile [
 
@@ -579,13 +604,16 @@ let zinc i =
           g_if decode.acc [
             g_if (msb decode.acc_op) 
               [ read_bytecode `acc_offset; ] 
-              [ read_stack (sp#q +: (ures decode.acc_op)) `acc_set; ];
+              [ read_stack (sp#q +: (aofs decode.acc_op)) `acc_set; ];
           ]
           (* push/acc/const *)
           @@ g_elif (decode.pushacc |: decode.pushconst |: 
                      decode.pushgetglobal |: decode.pushgetglobalfield |: 
-                     decode.pushatom) [ 
+                     decode.pushatom |: decode.pushenvacc) [ 
             push_stack_accu `pushacc; 
+          ]
+          @@ g_elif decode.envacc [
+            read_mem (env#q +: (aofs (decode.envacc_op +:. 1))) `envacc;
           ]
           @@ g_elif decode.const [ 
             g_if (msb decode.const_op) [
@@ -637,7 +665,7 @@ let zinc i =
               read_bytecode `makeblock_alloc
             ]
           ]
-          @@ g_elif decode.c_call [ read_bytecode `c_call ]
+          @@ g_elif decode.c_call [ push_stack env#q `c_call0 ]
           @@ g_elif decode.atom [
             g_if decode.atom_op 
               [ read_bytecode `atom ] 
@@ -646,9 +674,18 @@ let zinc i =
           ]
           @@ g_elif decode.apply [ 
             g_if decode.apply_op
-              [ state.next `apply_pop_stack ]
-              [ read_bytecode `apply ] 
+              [ state.next `apply_pop_stack ] 
+              [ read_bytecode `apply_eargs ] 
           ]
+          @@ g_elif decode.appterm [ 
+            g_if decode.appterm_op [
+              temp.(0) $== ures decode.appterm_op;
+              read_bytecode `appterm_1;
+            ] [
+              read_bytecode `appterm_0;
+            ]
+          ]
+          @@ g_elif decode.grab [ read_bytecode `grab ]
           @@ g_elif decode.stop [ state.next `invalid_instruction ]
           (* not implemented or invalid *)
           [ state.next `invalid_instruction; ];
@@ -657,7 +694,7 @@ let zinc i =
 
       `acc_offset, [
         when_bytecode_ready (fun offset -> [
-          read_stack (sp#q +: offset) `acc_set
+          read_stack (sp#q +: (aofs offset)) `acc_set
         ]);
       ];
 
@@ -679,6 +716,8 @@ let zinc i =
             ]
           ] @@ g_elif decode'.push [
             state.next `fetch;
+          ] @@ g_elif decode'.pushenvacc [
+            read_mem (env#q +: (aofs (decode'.pushenvacc_op +:. 1))) `envacc;
           ] @@ g_elif (decode'.pushgetglobal |: decode'.pushgetglobalfield) [
             read_bytecode `getglobal_data;
           ] @@ g_elif decode'.pushatom [
@@ -689,15 +728,26 @@ let zinc i =
             g_if (msb decode'.push_op) [
               read_bytecode `acc_offset;
             ] [
-              read_stack (sp#q +: (ures decode'.push_op)) `acc_set;
+              read_stack (sp#q +: (aofs decode'.push_op)) `acc_set;
             ]
+          ]
+        ]);
+      ];
+
+      `envacc, [
+        when_mem_ready (fun data -> [
+          accu $== data;
+          state.next `fetch;
+          g_when ((decode'.envacc &: (decode'.envacc_op ==:. 4)) |: 
+                  (decode'.pushenvacc &: (decode'.pushenvacc_op ==:. 4))) [
+            state.next `invalid_instruction; (* not implemented yet! *)
           ]
         ]);
       ];
 
       `pop, [
         when_bytecode_ready (fun offset -> [
-          sp $== sp#q +: offset;
+          sp $== sp#q +: (aofs offset);
           state.next `fetch;
         ]);
       ];
@@ -712,7 +762,7 @@ let zinc i =
       (* perform branch *)
       `branch, [
         when_bytecode_ready (fun data -> [
-          pc $== pc#q +: data -:. 1;
+          pc $== pc#q +: (bcofs (data -:. 1));
           state.next `fetch;
         ]);
       ];
@@ -765,7 +815,7 @@ let zinc i =
 
       `bcomp_setpc, [
         when_bytecode_ready (fun data -> [
-          pc $== pc#q +: data -:. 1;
+          pc $== pc#q +: (bcofs (data -:. 1));
           state.next `fetch;
         ])
       ];
@@ -796,7 +846,7 @@ let zinc i =
       `makeblock_read, [
         when_mem_ready (fun _ -> [
           g_if (count#q ==: makeblock_wosize#q) [
-            accu $== to_ptr makeblock_accu_base#q;
+            accu $== makeblock_accu_base#q;
             state.next `fetch;
           ] [
             pop_stack `makeblock_write;
@@ -834,27 +884,22 @@ let zinc i =
         ])
       ];
       `closure_var_start, [
-        accu $== to_ptr alloc_pointer#q;
+        accu $== alloc_pointer#q;
         when_mem_ready (fun _ -> [
           count $==. 0;
           g_if (closure_nvars#q <>:. 0) [
             state.next `closure_var_read;
           ] @@ g_elif (decode'.closure) [ (* select CLOSURE/CLOSUREREC *)
-            read_bytecode `closure_accu_pc;
+            read_bytecode `closure_accu_pc1;
           ] [
             state.next `closure_func_start
           ]
         ])
       ];
-      `closure_var_read, [
-        when_mem_ready (fun _ -> [
-          let addr = count#q -- "closure_var_idx" in
-          read_stack addr `closure_var_write;
-        ]);
-      ];
+      `closure_var_read, [ when_mem_ready (fun _ -> [ pop_stack `closure_var_write ]) ];
       `closure_var_write, [
         when_stack_ready (fun data -> 
-          let addr = count#q +: alloc_pointer#q +: closure_nfuncs_offs in
+          let addr = alloc_pointer#q +: (aofs (count#q +: closure_nfuncs_offs)) in
           [
             write_mem addr data `closure_var_read;
             count $== count_next;
@@ -888,51 +933,49 @@ let zinc i =
         ]
       end;
       (* read bytecode *)
-      `closure_func_pc, [
-        when_mem_ready (fun _ -> [
-          read_bytecode `closure_func_wpc;
-        ]);
-      ];
+      `closure_func_pc, [ when_mem_ready (fun _ -> [ read_bytecode `closure_func_wpc ]) ];
       (* write pc+pc[x] *)
       `closure_func_wpc, [
         when_bytecode_ready (fun data -> [ 
           alloc_pointer $== alloc_pointer_next;
-          write_mem alloc_pointer#q (to_code_ptr (closure_base_pc#q +: data)) `closure_func_stack; 
+          write_mem alloc_pointer#q 
+            (closure_base_pc#q +: (bcofs data)) 
+            `closure_func_stack; 
         ])
       ];
       (* store to stack *)
       `closure_func_stack, begin
         let data = 
           mux2 (count#q ==:. 0) 
-            (of_ptr accu#q) (alloc_pointer#q +: (sll count#q 1) +:. 1)  (* XXX ??? *)
+            accu#q (alloc_pointer#q +: (aofs (sll count#q 1) +:. 1))  (* XXX ??? *)
         in
         [
           when_mem_ready (fun _ -> [ 
             count $== count_next;
-            push_stack (to_ptr data) `closure_func_hdr; 
+            push_stack data `closure_func_hdr; 
           ])
         ]
       end;
 
-      `closure_accu_pc0, [ when_mem_ready (fun _ -> [ read_bytecode `closure_accu_pc ]) ];
-      `closure_accu_pc, [
+      `closure_accu_pc0, [ when_mem_ready (fun _ -> [ read_bytecode `closure_accu_pc1 ]) ];
+      `closure_accu_pc1, [
         when_bytecode_ready (fun ofs -> [
-          accu $== to_ptr (pc#q +: ofs);  (* XXX Code_val *)
-          state.next `fetch;
+          write_mem accu#q (pc#q +: (bcofs (ofs -:. 1))) `closure_accu_pc2
         ]);
       ];
+      `closure_accu_pc2, [ when_mem_ready (fun _ -> [ state.next `fetch ]) ];
 
       (* globals *)
       `setglobal, [
         when_bytecode_ready (fun ofs -> [
-          write_mem (i.globals_start_address +: ofs) accu#q `fetch;
+          write_mem (i.globals_start_address +: (aofs ofs)) accu#q `fetch;
           accu $== val_unit;
         ]);
       ];
 
       `getglobal_data, [
         when_bytecode_ready (fun ofs -> [
-          read_mem (i.globals_start_address +: ofs) `getglobal;
+          read_mem (i.globals_start_address +: (aofs ofs)) `getglobal;
         ]);
       ];
 
@@ -947,7 +990,7 @@ let zinc i =
 
       `getglobalfield_data, [
         when_bytecode_ready (fun ofs -> [
-          read_mem (accu#q +: ofs) `getglobalfield
+          read_mem (accu#q +: (aofs ofs)) `getglobalfield
         ]);
       ];
 
@@ -960,16 +1003,33 @@ let zinc i =
 
       (* XXXX HMMM what to do here? *)
       (* XXX sets env? *)
-      `c_call, [
-        when_bytecode_ready (fun _ -> [
+      `c_call0, [ when_stack_ready (fun _ -> [ read_bytecode `c_call1; ]) ];
+      `c_call1, [
+        when_bytecode_ready (fun prim -> [
+          c_call_prim $== prim;
           g_if (decode'.c_call_op ==:. 5) 
             (* not implemented properly...stack=accu, multi args *)
             [ state.next `invalid_instruction ]
             (* XXX Somehow we need to do the C-call...through the c-testbench? *)
             [
-              accu $== val_unit; (* XXX should be result of c call *)
-              state.next `fetch 
+              c_call_request $==. 1;
+              state.next `c_call2;
             ]
+        ]);
+      ];
+
+      `c_call2, [
+        g_when (i.c_call_ready) [
+          c_call_request $==. 0;
+          accu $== i.c_call_result; (* result of c-call *)
+          pop_stack `c_call3;
+        ]
+      ];
+
+      `c_call3, [
+        when_stack_ready (fun _ -> [
+          sp $== sp#q +: (aofs (decode'.c_call_op));
+          state.next `fetch;
         ]);
       ];
  
@@ -981,27 +1041,28 @@ let zinc i =
       ];
 
       `atom, begin
-        let get_ofs ofs = 
+        let get_tag ofs = 
           mux2 
             ((decode'.atom &: decode'.atom_op) |: (decode'.pushatom &: decode'.pushatom_op))
                 ofs (zero dbits)
         in
         [
           when_bytecode_ready (fun ofs -> [
-            accu $== atom_ptr (get_ofs ofs);
+            accu $== atom_ptr (get_tag ofs);
             state.next `fetch;
           ]);
         ]
       end;
 
-      (* applyX *)
+      (* applyX XXX TODO APPLY *)
       `apply_pop_stack, [
         when_stack_ready (fun d -> [
           shift_temp_up d;
           count $== count_next;
           g_if (count#q ==: ures decode'.apply_op) [
             count $==. 0;
-            push_stack extra_args#q `apply_push_stack_env;
+            push_stack (val_int extra_args#q) `apply_push_stack_env;
+            extra_args $== ures (decode'.apply_op -:. 1); (* update extra_args *)
           ] [
             pop_stack `apply_pop_stack;
           ]
@@ -1021,19 +1082,81 @@ let zinc i =
           shift_temp_down (zero dbits);
           count $== count_next;
           g_if (count#q ==: ures decode'.apply_op) [
-            state.next `apply;
+            read_mem accu#q `apply;
           ] [
             push_stack temp.(0)#q `apply_push_stack_args;
           ];
         ]);
       ];
 
-      `apply, [
+      `apply_eargs, [
         when_bytecode_ready (fun earg -> [
           extra_args $== mux2 (decode'.apply_op ==:. 0) (earg -:. 1) (zero dbits);
           pc $== accu#q; (* XXX Code_val *)
-          env $== accu#q;
           state.next `fetch
+        ]);
+      ];
+
+      `apply, [
+        when_mem_ready (fun pc' -> [
+          pc $== pc';
+          env $== accu#q;
+          state.next `fetch;
+        ])
+      ];
+
+      (* APPTERMx *)
+      `appterm_0, [
+        when_bytecode_ready (fun nargs -> [
+          temp.(0) $== nargs; 
+          read_bytecode `appterm_1;
+        ])
+      ];
+
+      `appterm_1, [
+        when_bytecode_ready (fun slotsize -> [
+          temp.(1) $== sp#q +: (aofs (slotsize -: temp.(0)#q)); 
+          count $== temp.(0)#q -:. 1; 
+          state.next `appterm_2;
+        ])
+      ];
+
+      `appterm_2, [ (* read stack *)
+        when_stack_ready (fun _ -> [
+          g_if (count#q ==:. (-1)) [
+            read_mem accu#q `appterm_4;
+          ] [
+            read_stack (sp#q +: (aofs count#q)) `appterm_3;
+          ]
+        ]);
+      ];
+
+      `appterm_3, [ (* write stack *)
+        when_stack_ready (fun d -> [
+          write_stack (temp.(1)#q +: (aofs count#q)) d `appterm_2;
+          count $== count#q -:. 1;
+        ])
+      ];
+
+      `appterm_4, [
+        when_mem_ready (fun pcn -> [
+          sp $== temp.(1)#q;
+          pc $== pcn;
+          env $== accu#q;
+          extra_args $== extra_args#q +: temp.(0)#q -:. 1;
+          state.next `fetch;
+        ])
+      ];
+
+      `grab, [
+        when_bytecode_ready (fun reqd -> [
+          g_if (extra_args#q >=: reqd) [
+            extra_args $== extra_args#q -: reqd;
+            state.next `fetch;
+          ] [
+            (* TODO *)
+            state.next `invalid_instruction
+          ]
         ]);
       ];
 
@@ -1050,9 +1173,12 @@ let zinc i =
     sp=sp#q;
     accu=accu#q;
     env=env#q;
+    extra_args=extra_args#q;
     instruction = mux2 (state.is `decode &: bc_i.memory_ready) instruction (consti 8 255);
     error=error#q;
     memory_o; decode=decode'; 
+    c_call_request=c_call_request#q;
+    c_call_prim=c_call_prim#q;
   }
 
 

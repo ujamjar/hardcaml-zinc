@@ -1,9 +1,10 @@
 # OASIS_START
-# DO NOT EDIT (digest: f6a3e18a4d46c240efc927c45fa1250c)
+# DO NOT EDIT (digest: 4de16a5e36d90f826ca4b27b06bad125)
 Arbiter
 Instr
 Load
 State
 Zinc
+C_runtime
 Framework
 # OASIS_STOP
