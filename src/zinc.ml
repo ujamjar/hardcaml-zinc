@@ -121,11 +121,16 @@ module Decode = interface
   assign[1]
   envacc[1] envacc_op
   pushenvacc[1] pushenvacc_op
+  push_retaddr[1]
   apply[1] apply_op
   appterm[1] appterm_op
-  grab[1]
   closure[1]
   closurerec[1]
+  return[1]
+  restart[1]
+  grab[1]
+  offsetclosure[1] offsetclosure_op[2]
+  pushoffsetclosure[1] pushoffsetclosure_op[2]
   pushgetglobal[1] getglobal[1] 
   pushgetglobalfield[1] getglobalfield[1]
   setglobal[1]
@@ -134,17 +139,36 @@ module Decode = interface
   makeblock[1] makeblock_op
   getfield[1] getfield_op
   setfield[1] setfield_op
+  vectlength[1]
+  getvectitem[1]
+  setvectitem[1]
+  getstringchar[1]
+  setstringchar[1]
   branch[1] branch_op
+  boolnot[1]
+  pushtrap[1]
+  poptrap[1]
+  raise_[1]
+  check_signals[1]
   c_call[1] c_call_op
   const[1] const_op
   pushconst[1] pushconst_op
   alu[1] alu_op
   comp[1] comp_op
   offsetint[1]
+  offsetref[1]
+  isint[1]
+  getmethod[1]
   bcomp[1] bcomp_op
   ucomp[1] ucomp_op
   bucomp[1] bucomp_op
+  getpubmet[1]
+  getdynmet[1]
   stop[1]
+  event[1]
+  break[1]
+  reraise[1]
+  raise_notrace[1]
 end
 
 module I = interface
@@ -212,7 +236,7 @@ let decode instr =
   let pushenvacc = (sel PUSHENVACC1).gte &: (sel PUSHENVACC).lte in
   let pushenvacc_op = (sel PUSHENVACC1).range.[2:0] in
 
-  (* push_retaddr *)
+  let push_retaddr = (sel PUSH_RETADDR).eq in
 
   let apply = (sel APPLY).gte &: (sel APPLY3).lte in
   let apply_op = (sel APPLY).range.[1:0] in
@@ -220,20 +244,23 @@ let decode instr =
   let appterm = (sel APPTERM).gte &: (sel APPTERM3).lte in
   let appterm_op = (sel APPTERM).range.[1:0] in
 
-  (* return, reset, grab *)
-  let grab = (sel GRAB).eq in
   let closure = (sel CLOSURE).eq in
   let closurerec = (sel CLOSUREREC).eq in
-
-  (* offsetclosurem2, offsetclosure0, offsetclosure2, offsetclosure *)
-
-  (* pushoffsetclosurem2, pushoffsetclosure0, pushoffsetclosure2, pushoffsetclosure *)
+  let return = (sel RETURN).eq in
+  let restart = (sel RESTART).eq in
+  let grab = (sel GRAB).eq in
 
   let pushgetglobal = (sel PUSHGETGLOBAL).eq in
   let getglobal = (sel GETGLOBAL).eq in
   let pushgetglobalfield = (sel PUSHGETGLOBALFIELD).eq in
   let getglobalfield = (sel GETGLOBALFIELD).eq in
   let setglobal = (sel SETGLOBAL).eq in
+
+  let offsetclosure = (sel OFFSETCLOSUREM2).gte &: (sel OFFSETCLOSURE).lte in
+  let offsetclosure_op = (sel OFFSETCLOSUREM2).range.[1:0] in
+
+  let pushoffsetclosure = (sel PUSHOFFSETCLOSUREM2).gte &: (sel PUSHOFFSETCLOSURE).lte in
+  let pushoffsetclosure_op = (sel PUSHOFFSETCLOSUREM2).range.[1:0] in
 
   let atom = (sel ATOM0).gte &: (sel ATOM).lte in
   let atom_op = (sel ATOM0).range.[0:0] in
@@ -250,19 +277,24 @@ let decode instr =
   let setfield = (sel SETFIELD).gte &: (sel SETFLOATFIELD).lte in
   let setfield_op = (sel SETFIELD).range.[2:0] in
 
-  (* vectlength, getvectitem, setvectitem *)
-  
-  (* getstringchar, setstringchar *)
+  let vectlength = (sel VECTLENGTH).eq in
+  let getvectitem = (sel GETVECTITEM).eq in
+  let setvectitem = (sel SETVECTITEM).eq in
+
+  let getstringchar = (sel GETSTRINGCHAR).eq in
+  let setstringchar = (sel SETSTRINGCHAR).eq in
 
   let branch = (sel BRANCH).gte &: (sel SWITCH).lte in (* include switch? *)
   let branch_op = (sel BRANCH).range.[1:0] in
 
-  (* boolnot *)
+  let boolnot = (sel BOOLNOT).eq in
 
-  (* pushtrap, poptrap, raise *)
+  let pushtrap = (sel PUSHTRAP).eq in
+  let poptrap = (sel POPTRAP).eq in
+  let raise_ = (sel RAISE).eq in
   
-  (* check_signals *)
-  
+  let check_signals = (sel CHECK_SIGNALS).eq in
+
   let c_call = (sel C_CALL1).gte &: (sel C_CALLN).lte in
   let c_call_op = (sel C_CALL1).range.[2:0] in
   
@@ -278,8 +310,10 @@ let decode instr =
   let comp = (sel EQ).gte &: (sel GEINT).lte in
   let comp_op = (sel EQ).range.[2:0] in
   
-  (* offsetref, isint, getmethod *)
   let offsetint = (sel OFFSETINT).eq in
+  let offsetref = (sel OFFSETREF).eq in
+  let isint = (sel ISINT).eq in
+  let getmethod = (sel GETMETHOD).eq in
   
   let bcomp = (sel BEQ).gte &: (sel BGEINT).lte in
   let bcomp_op = (sel BGEINT).range.[2:0] in
@@ -290,10 +324,14 @@ let decode instr =
   let bucomp = (sel BULTINT).gte &: (sel BUGEINT).lte in
   let bucomp_op = (sel BULTINT).range.[0:0] in
   
-  (* getpubmet, getdynmet *)
+  let getpubmet = (sel GETPUBMET).eq in
+  let getdynmet = (sel GETDYNMET).eq in
   
-  (* event, break, reraise, raise_notrace *)
   let stop = (sel STOP).eq in
+  let event = (sel EVENT).eq in
+  let break = (sel BREAK).eq in
+  let reraise = (sel RERAISE).eq in
+  let raise_notrace = (sel RAISE_NOTRACE).eq in
 
   Decode.{ 
     acc; acc_op; 
@@ -301,11 +339,16 @@ let decode instr =
     pop; assign;
     envacc; envacc_op;
     pushenvacc; pushenvacc_op;
+    push_retaddr;
     apply; apply_op;
     appterm; appterm_op;
-    grab;
     closure;
     closurerec;
+    return; 
+    restart;
+    grab;
+    offsetclosure; offsetclosure_op;
+    pushoffsetclosure; pushoffsetclosure_op;
     pushgetglobal; getglobal; 
     pushgetglobalfield; getglobalfield;
     setglobal;
@@ -314,17 +357,26 @@ let decode instr =
     makeblock; makeblock_op;
     getfield; getfield_op;
     setfield; setfield_op;
+    vectlength; getvectitem; setvectitem;
+    getstringchar; setstringchar;
     branch; branch_op;
+    boolnot;
+    pushtrap; poptrap; raise_;
+    check_signals;
     c_call; c_call_op;
     const; const_op;
     pushconst; pushconst_op;
     alu; alu_op;
     comp; comp_op;
+    offsetref; isint; getmethod;
     offsetint;
     bcomp; bcomp_op;
     ucomp; ucomp_op;
     bucomp; bucomp_op;
+    getpubmet; getdynmet;
     stop;
+    event; break;
+    reraise; raise_notrace;
   }
 
 let alu_int op a b = 
@@ -376,12 +428,19 @@ type states = [
   `setglobal | `getglobal_data | `getglobal |
   `getglobalfield_data | `getglobalfield |
   `makeblock | `makeblock_alloc | `makeblock_accu | `makeblock_read | `makeblock_write |
-  `offsetint |
+  `offsetint | `offsetref0 | `offsetref1 | `offsetref2 |
   `atom |
   `apply_pop_stack | `apply_push_stack_env | `apply_push_stack_pc | 
   `apply_push_stack_args | `apply_eargs | `apply |
   `appterm_0 | `appterm_1 | `appterm_2 | `appterm_3 | `appterm_4 |
   `grab |
+  `push_retaddr0 | `push_retaddr1 | `push_retaddr2 | `push_retaddr3 | 
+  `vectlength |
+  `getvectitem0 | `getvectitem1 |
+  `setvectitem0 | `setvectitem1 | `setvectitem2 |
+  `getstringchar0 | `getstringchar1 |
+  `setstringchar0 | `setstringchar1 | `setstringchar2 | `setstringchar3 |
+  `not_implemented |
   `invalid_instruction 
   ] deriving(Show, Enum, Bounded)
 
@@ -405,6 +464,7 @@ let zinc i =
   let sres x = sresize x dbits in
   let val_int x = uresize x (dbits-1) @: vdd in
   let val_unit = val_int (zero dbits) in
+  let int_val x = sra x 1 in
 
   (* memory interface *)
   let stack_o = Memory.O.(map (fun (n,b) -> Seq.g_reg ~e b) t) in
@@ -564,6 +624,17 @@ let zinc i =
   let atom_ptr tag = i.atom_table_address +: (sll tag asft) in
   let aofs v = sll (uresize v dbits) 3 in
   let bcofs v = sll (uresize v dbits) 2 in
+  let hdrp v = v +: (aofs (consti dbits (-1))) in
+
+  let get_byte s d = 
+    let f n = d.[(8*n)+7:(8*n)] in
+    mux s @@ Array.to_list @@ Array.init 8 f
+  in
+
+  let set_byte s d b = 
+    let f n = insert ~t:d ~f:b (n*8) in
+    mux s @@ Array.to_list @@ Array.init 8 f
+  in
 
   compile [
 
@@ -648,6 +719,11 @@ let zinc i =
           @@ g_elif decode.bucomp [ read_bytecode `bucomp; ]
           (* offset *)
           @@ g_elif decode.offsetint [ read_bytecode `offsetint ]
+          @@ g_elif decode.offsetref [ read_bytecode `offsetref0 ]
+          @@ g_elif decode.isint [ 
+            accu $== (ures accu#q.[0:0]);
+            state.next `fetch;
+          ]
           (* closure(rec) *)
           @@ g_elif decode.closure [ read_bytecode `closure_nvars; ] 
           @@ g_elif decode.closurerec [ read_bytecode `closure_nfuncs; ] 
@@ -687,6 +763,44 @@ let zinc i =
           ]
           @@ g_elif decode.grab [ read_bytecode `grab ]
           @@ g_elif decode.stop [ state.next `invalid_instruction ]
+          @@ g_elif decode.push_retaddr [ read_bytecode `push_retaddr0 ]
+          @@ g_elif decode.vectlength [ read_mem (hdrp accu#q) `vectlength ]
+          @@ g_elif decode.getvectitem [ pop_stack `getvectitem0 ]
+          @@ g_elif decode.setvectitem [ pop_stack `setvectitem0 ]
+          @@ g_elif decode.getstringchar [ pop_stack `getstringchar0 ]
+          @@ g_elif decode.setstringchar [ pop_stack `setstringchar0 ]
+          @@ g_elif decode.boolnot [ 
+            accu $== val_int (~: (accu#q.[1:1])); 
+            state.next `fetch 
+          ]
+          @@ g_elif (reduce (|:)
+            [ (* stuff that still needs to be implemented *)
+              decode.return;
+              decode.restart;
+              decode.offsetclosure;
+              decode.pushoffsetclosure;
+              (*decode.vectlength;
+              decode.getvectitem;
+              decode.setvectitem;*)
+              (*decode.getstringchar;
+              decode.setstringchar;
+              decode.boolnot;*)
+              decode.pushtrap;
+              decode.poptrap;
+              decode.raise_;
+              decode.check_signals;
+              (*decode.offsetref;
+              decode.isint;*)
+              decode.getmethod;
+              decode.getpubmet;
+              decode.getdynmet;
+              decode.event;
+              decode.break;
+              decode.reraise;
+              decode.raise_notrace;
+            ]) [
+              state.next `not_implemented;
+          ]
           (* not implemented or invalid *)
           [ state.next `invalid_instruction; ];
         ])
@@ -1001,8 +1115,7 @@ let zinc i =
         ])
       ];
 
-      (* XXXX HMMM what to do here? *)
-      (* XXX sets env? *)
+      (* XXX TODO: C_CALLN *)
       `c_call0, [ when_stack_ready (fun _ -> [ read_bytecode `c_call1; ]) ];
       `c_call1, [
         when_bytecode_ready (fun prim -> [
@@ -1036,6 +1149,26 @@ let zinc i =
       `offsetint, [
         when_bytecode_ready (fun data -> [
           accu $== accu#q +: (sll data 1);
+          state.next `fetch;
+        ]);
+      ];
+
+      `offsetref0, [
+        when_bytecode_ready (fun data -> [
+          temp.(0) $== data;
+          read_mem accu#q `offsetref1; 
+        ]);
+      ];
+
+      `offsetref1, [
+        when_mem_ready (fun data -> [
+          write_mem accu#q (data +: (sll temp.(0)#q 1)) `offsetref2;
+        ]);
+      ];
+
+      `offsetref2, [
+        when_mem_ready (fun _ -> [
+          accu $== val_unit;
           state.next `fetch;
         ]);
       ];
@@ -1154,13 +1287,111 @@ let zinc i =
             extra_args $== extra_args#q -: reqd;
             state.next `fetch;
           ] [
-            (* TODO *)
+            (* XXX TODO *)
             state.next `invalid_instruction
           ]
         ]);
       ];
 
+      `push_retaddr0, [
+        when_bytecode_ready (fun ofs -> [
+          push_stack (pc#q +: (aofs ofs)) `push_retaddr1; (* XXX ofs-1??? *)
+        ]);
+      ];
+
+      `push_retaddr1, [
+        when_stack_ready (fun _ -> [ push_stack env#q `push_retaddr2 ]);
+      ];
+
+      `push_retaddr2, [
+        when_stack_ready (fun _ -> [ push_stack (val_int extra_args#q) `push_retaddr3 ]);
+      ];
+
+      `push_retaddr3, [
+        when_stack_ready (fun _ -> [ state.next `fetch ]);
+      ];
+
+      `vectlength, [
+        when_mem_ready (fun d -> [ (* XXX; double??? *)
+          accu $== val_int (srl d 10);
+        ]);
+      ];
+
+      `getvectitem0, [
+        when_stack_ready (fun ofs -> [ read_mem (accu#q +: (aofs ofs)) `getvectitem1 ]);
+      ];
+
+      `getvectitem1, [
+        when_mem_ready (fun data -> [ 
+          accu $== data; 
+          state.next `fetch 
+        ]);
+      ];
+
+      `setvectitem0, [
+        when_stack_ready (fun d -> [ 
+          temp.(0) $== d;
+          pop_stack `setvectitem1 
+        ]);
+      ];
+ 
+      `setvectitem1, [
+        when_stack_ready (fun d -> [
+          write_mem (accu#q +: (aofs (int_val temp.(0)#q))) d `fetch;
+        ]);
+      ];
+
+      `setvectitem2, [
+        when_mem_ready (fun _ -> [
+          accu $== val_unit;
+          state.next `fetch;
+        ]);
+      ];
+
+      `getstringchar0, [
+        when_stack_ready (fun d -> [
+          temp.(0) $== d;
+          read_mem accu#q `getstringchar1;
+        ]);
+      ];
+
+      `getstringchar0, [
+        when_stack_ready (fun d -> [
+          accu $== val_int @@ get_byte temp.(0)#q.[3:1] d;
+          state.next `fetch
+        ]);
+      ];
+
+      `setstringchar0, [
+        when_stack_ready (fun d -> [
+          temp.(0) $== d;
+          pop_stack `setstringchar1;
+        ]);
+      ];
+
+      `setstringchar1, [
+        when_stack_ready (fun d -> [
+          temp.(1) $== d;
+          read_mem accu#q `setstringchar2;
+        ]);
+      ];
+
+      `setstringchar2, [
+        when_mem_ready (fun d -> [
+          write_mem accu#q
+            (set_byte temp.(1)#q.[3:1] d temp.(0)#q.[8:1])
+            `setstringchar3;
+        ]);
+      ];
+
+      `setstringchar3, [
+        when_mem_ready (fun _ -> [ state.next `fetch ]);
+      ];
+
       (* invalid, or more likely not implemented yet *)
+      `not_implemented, [
+        error $==. 1;
+      ];
       `invalid_instruction, [
         error $==. 1;
       ];
