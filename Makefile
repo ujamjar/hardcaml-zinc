@@ -32,3 +32,5 @@ clean:
 	ocaml setup.ml -clean
 	- find . -name "*~" | xargs rm
 
+include Makefile.test
+

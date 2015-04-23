@@ -1,4 +1,33 @@
-(* the hardcaml implementation of the zinc machine *)
+(* hardcaml implementation of the zinc machine *)
+
+(* instructions todo;
+
+  RETURN, RESTART, OFFSETCLOSURE, PUSHOFFSETCLOSURE
+
+  PUSHTRAP, POPTRAP, RAISE, CHECK_SIGNALS
+
+  GETMETHOD, GETPUBMET, GETDYNMET
+
+  EVENT, BREAK, RERAISE, RAISE_NOTRACE
+
+  DIVINT, MODINT
+
+  C_CALLN (part of decode.c_call)
+  
+  SWITCH (part of decode.branch)
+
+  STOP (as part of callbacks)
+
+  APPLY (decode.apply - APPLY1..3 ok)
+
+  APPTERM (decode.appterm - APPTERM1..3 ok)
+
+  GRAB (extra_args < required)
+
+  MAKEFLOATBLOCK
+
+*)
+
 open HardCaml
 open Signal.Comb
 
@@ -432,7 +461,7 @@ type states = [
   `atom |
   `apply_pop_stack | `apply_push_stack_env | `apply_push_stack_pc | 
   `apply_push_stack_args | `apply_eargs | `apply |
-  `appterm_0 | `appterm_1 | `appterm_2 | `appterm_3 | `appterm_4 |
+  `appterm0 | `appterm1 | `appterm2 | `appterm3 | `appterm4 |
   `grab |
   `push_retaddr0 | `push_retaddr1 | `push_retaddr2 | `push_retaddr3 | 
   `vectlength |
@@ -671,8 +700,35 @@ let zinc i =
       (* decode instruction *)
       `decode, [
         when_bytecode_ready (fun _ -> [
+          g_if (reduce (|:)
+            [ (* try to catch stuff thats not implemented yet *)
+              decode.return;
+              decode.restart;
+              decode.offsetclosure;
+              decode.pushoffsetclosure;
+              decode.pushtrap;
+              decode.poptrap;
+              decode.raise_;
+              decode.check_signals;
+              decode.getmethod;
+              decode.getpubmet;
+              decode.getdynmet;
+              decode.event;
+              decode.break;
+              decode.reraise;
+              decode.raise_notrace;
+              decode.alu &: (decode.alu_op ==:. 4); (* DIVINT *)
+              decode.alu &: (decode.alu_op ==:. 5); (* MODINT *)
+              decode.c_call &: (decode.c_call_op ==:. 5); (* C_CALLN *)
+              decode.branch &: (decode.branch_op ==:. 3); (* SWITCH *)
+              decode.apply &: (decode.apply_op ==:. 0); (* APPLY *)
+              decode.appterm &: (decode.appterm_op ==:. 0); (* APPTERM - not tested *)
+              decode.makeblock &: (decode.makeblock_op ==:. 4); (* MAKEFLOATBLOCK *)
+            ]) [
+              state.next `not_implemented;
+          ]
           (* branch instruction *)
-          g_if decode.acc [
+          @@ g_elif decode.acc [
             g_if (msb decode.acc_op) 
               [ read_bytecode `acc_offset; ] 
               [ read_stack (sp#q +: (aofs decode.acc_op)) `acc_set; ];
@@ -734,8 +790,6 @@ let zinc i =
           @@ g_elif decode.makeblock [ 
             g_if (decode.makeblock_op ==:. 0) [
               read_bytecode `makeblock
-            ] @@ g_elif (decode.makeblock_op ==:. 4) [
-              state.next `invalid_instruction (* MAKEFLOATBLOCK *)
             ] [
               makeblock_wosize $== ures decode.makeblock_op; (* size *)
               read_bytecode `makeblock_alloc
@@ -756,9 +810,9 @@ let zinc i =
           @@ g_elif decode.appterm [ 
             g_if decode.appterm_op [
               temp.(0) $== ures decode.appterm_op;
-              read_bytecode `appterm_1;
+              read_bytecode `appterm1;
             ] [
-              read_bytecode `appterm_0;
+              read_bytecode `appterm0;
             ]
           ]
           @@ g_elif decode.grab [ read_bytecode `grab ]
@@ -772,34 +826,6 @@ let zinc i =
           @@ g_elif decode.boolnot [ 
             accu $== val_int (~: (accu#q.[1:1])); 
             state.next `fetch 
-          ]
-          @@ g_elif (reduce (|:)
-            [ (* stuff that still needs to be implemented *)
-              decode.return;
-              decode.restart;
-              decode.offsetclosure;
-              decode.pushoffsetclosure;
-              (*decode.vectlength;
-              decode.getvectitem;
-              decode.setvectitem;*)
-              (*decode.getstringchar;
-              decode.setstringchar;
-              decode.boolnot;*)
-              decode.pushtrap;
-              decode.poptrap;
-              decode.raise_;
-              decode.check_signals;
-              (*decode.offsetref;
-              decode.isint;*)
-              decode.getmethod;
-              decode.getpubmet;
-              decode.getdynmet;
-              decode.event;
-              decode.break;
-              decode.reraise;
-              decode.raise_notrace;
-            ]) [
-              state.next `not_implemented;
           ]
           (* not implemented or invalid *)
           [ state.next `invalid_instruction; ];
@@ -1238,40 +1264,40 @@ let zinc i =
         ])
       ];
 
-      (* APPTERMx *)
-      `appterm_0, [
+      (* APPTERM[x] *)
+      `appterm0, [
         when_bytecode_ready (fun nargs -> [
           temp.(0) $== nargs; 
-          read_bytecode `appterm_1;
+          read_bytecode `appterm1;
         ])
       ];
 
-      `appterm_1, [
+      `appterm1, [
         when_bytecode_ready (fun slotsize -> [
           temp.(1) $== sp#q +: (aofs (slotsize -: temp.(0)#q)); 
           count $== temp.(0)#q -:. 1; 
-          state.next `appterm_2;
+          state.next `appterm2;
         ])
       ];
 
-      `appterm_2, [ (* read stack *)
+      `appterm2, [ (* read stack *)
         when_stack_ready (fun _ -> [
           g_if (count#q ==:. (-1)) [
-            read_mem accu#q `appterm_4;
+            read_mem accu#q `appterm4;
           ] [
-            read_stack (sp#q +: (aofs count#q)) `appterm_3;
+            read_stack (sp#q +: (aofs count#q)) `appterm3;
           ]
         ]);
       ];
 
-      `appterm_3, [ (* write stack *)
+      `appterm3, [ (* write stack *)
         when_stack_ready (fun d -> [
-          write_stack (temp.(1)#q +: (aofs count#q)) d `appterm_2;
+          write_stack (temp.(1)#q +: (aofs count#q)) d `appterm2;
           count $== count#q -:. 1;
         ])
       ];
 
-      `appterm_4, [
+      `appterm4, [
         when_mem_ready (fun pcn -> [
           sp $== temp.(1)#q;
           pc $== pcn;

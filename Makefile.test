@@ -1,0 +1,13 @@
+# path to an ocaml distribution
+OCAML_DIST_PATH=/home/andyman/dev/github/forks/ocaml-4.02.1-debug
+TOOL_OCAML_PATH=${OCAML_DIST_PATH}/testsuite/tests/tool-ocaml
+
+# which test and display options
+DBG=-t
+TEST=t000
+
+run-test: 
+	ocamlc -o tool-ocaml-test.byte \
+		-I ${TOOL_OCAML_PATH} ${TOOL_OCAML_PATH}/lib.ml ${TOOL_OCAML_PATH}/${TEST}.ml
+	./hardcamlrun.native -i tool-ocaml-test.byte ${DBG}
+
