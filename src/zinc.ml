@@ -35,31 +35,6 @@ let dbits = 64
 let bpw = dbits/8
 let asft = Utils.clog2 bpw
 
-(* gc colours *)
-let white = consti 2 Instr.white
-let gray = consti 2 Instr.gray
-let blue = consti 2 Instr.blue
-let black = consti 2 Instr.black
-
-(* tags *)
-let lazy_tag = consti 8 Instr.lazy_tag
-let closure_tag = consti 8 Instr.closure_tag
-let object_tag = consti 8 Instr.object_tag
-let infix_tag = consti 8 Instr.infix_tag
-let forward_tag = consti 8 Instr.forward_tag
-let no_scan_tag = consti 8 Instr.no_scan_tag
-let abstract_tag = consti 8 Instr.abstract_tag
-let string_tag = consti 8 Instr.string_tag
-let double_tag = consti 8 Instr.double_tag
-let double_array_tag = consti 8 Instr.double_array_tag
-let custom_tag = consti 8 Instr.custom_tag
-
-let hdr_size_bits = dbits - 10
-let make_header size col tag = 
-  assert (width tag = 8);
-  assert (width col = 2);
-  uresize size hdr_size_bits @: col @: tag
-
 module Rspec = struct
   let reg_spec = Signal.Seq.r_sync
   let ram_spec = Signal.Seq.r_none
@@ -479,6 +454,15 @@ let state_range, state_str =
   let states = List.map Show.show<states> stater in
   stater, states
 
+module M = Mlvalues.Make(struct
+  include HardCaml.Signal.Comb
+  let (/:) a b = failwith "/:"
+  let (%:) a b = failwith "%:"
+  let const = consti dbits
+  let zero = const 0
+  let one = const 1
+end)
+
 let zinc i = 
   let open Memory.O in
   let open Memory.I in
@@ -603,7 +587,7 @@ let zinc i =
 
   let alloc_block col tag words rstate = 
     g_proc [
-      write_mem alloc_base#q (make_header words col tag) rstate;
+      write_mem alloc_base#q (M.make_header words col tag) rstate;
       alloc_base $== (alloc_base#q +: (sll (words +:. 1) asft));
       alloc_pointer $== alloc_base#q +:. bpw; (* 1 past the header *)
     ];
@@ -970,7 +954,7 @@ let zinc i =
 
       `makeblock_alloc, [
         when_bytecode_ready (fun tag -> [
-          alloc_block black tag.[7:0] makeblock_wosize#q `makeblock_accu;
+          alloc_block M.black (ures tag.[7:0]) makeblock_wosize#q `makeblock_accu;
         ]);
       ];
       
@@ -1020,7 +1004,7 @@ let zinc i =
       ];
       `closure_alloc, [
         when_stack_ready (fun _ -> [
-          alloc_block black closure_tag closure_blksize `closure_var_start;
+          alloc_block M.black M.closure_tag closure_blksize `closure_var_start;
         ])
       ];
       `closure_var_start, [
@@ -1060,7 +1044,7 @@ let zinc i =
       ];
       (* write header *)
       `closure_func_hdr, begin 
-        let data = make_header (sll count#q 1) white infix_tag in
+        let data = M.make_header (sll count#q 1) M.white M.infix_tag in
         [
           when_stack_ready (fun _ -> [
             alloc_pointer $== alloc_pointer_next;

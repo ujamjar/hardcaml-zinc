@@ -1,27 +1,4 @@
-module V = struct
-  open Int64
-
-  type t = int64
-  
-  let (+:) a b = add a b
-  let (-:) a b = sub a b
-  let ( *: ) a b = mul a b
-
-  let ( /: ) a b = div a b
-  let ( %: ) a b = rem a b
-  
-  let (&:) a b = logand a b
-  let (|:) a b = logor a b
-  let (^:) a b = logxor a b
-  let (~:) a = lognot a
-
-  let sll a b = shift_left a b
-  let srl a b = shift_right_logical a b
-  let sra a b = shift_right a b
-
-end
-
-open V
+open Ops.Int64
 
 type state = 
   {
@@ -32,21 +9,7 @@ type state =
     mutable extra_args : t;
   }
 
-let make_header size colour tag =
-  let colour = Int64.of_int colour in
-  let tag = Int64.of_int tag in
-  (sll (tag    &: 255L)  0) |:
-  (sll (colour &:   3L)  8) |:
-  (sll  size        10) 
-
-let val_int i = (sll i 1) |: 1L
-let val_unit = val_int 0L
-let val_false = val_int 0L
-let val_true = val_int 1L
-let int_val v = sra v 1
-
-let is_int v = (v &: 1L) = 1L
-let is_block v = not (is_int v)
+include Mlvalues.Make(Ops.Int64)
 
 let mofs addr = srl addr 3
 let aofs x = sll x 3
@@ -54,13 +17,11 @@ let aofs x = sll x 3
 let header memory ptr = memory.{ Int64.to_int (mofs ptr -: 1L) }
 let field memory ptr field = memory.{ Int64.to_int (mofs ptr +: field) }
 let set_field memory ptr field v = memory.{ Int64.to_int (mofs ptr +: field) } <- v
-let size hdr = srl hdr 10
-let colour hdr = (srl hdr 8) &: 3L
-let tag hdr = hdr &: 255L
 
 let header_size memory ptr = size (header memory ptr) 
 let header_colour memory ptr = colour (header memory ptr) 
 let header_tag memory ptr = tag (header memory ptr) 
+
 
 let fetch memory pc = 
   let ins = memory.{ Int64.to_int (mofs pc) } in

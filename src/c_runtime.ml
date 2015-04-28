@@ -18,6 +18,8 @@ type c_call =
 
 open Int64
 
+include Mlvalues.Make(Ops.Int64)
+
 (* maintain a small seperate heap section of c-allocation *)
 let c_heap_address = ref 0
 let init addr = c_heap_address := addr/8
@@ -25,21 +27,23 @@ let init addr = c_heap_address := addr/8
 (* allocate a block in the c-heap. *)
 let alloc_block st size colour tag = 
   let p = !c_heap_address in
-  c_heap_address := !c_heap_address + size + 1;
-  st.memory.{p} <- Load.make_header size colour tag;
+  c_heap_address := !c_heap_address + (Int64.to_int size) + 1;
+  st.memory.{p} <- Int64.(make_header size colour tag);
   Int64.of_int ((p+1)*8)
 
-let is_int v = (logand v 1L) <> 0L 
+(*let is_int v = (logand v 1L) <> 0L 
 let is_block v = not (is_int v) 
-let header st v = st.memory.{((to_int v) / 8)-1} 
-let field st v i = st.memory.{((to_int v) / 8)+i} 
-let set_field st v i d = st.memory.{((to_int v) / 8)+i} <- d
 let tag v = logand v 0xFFL 
 let size v = shift_right_logical v 10 
 let int_val v = shift_right v 1
 
 let val_unit = 1L
 let val_int x = logor (shift_left x 1) 1L
+*)
+
+let header st v = st.memory.{((to_int v) / 8)-1} 
+let field st v i = st.memory.{((to_int v) / 8)+i} 
+let set_field st v i d = st.memory.{((to_int v) / 8)+i} <- d
 
 let c1_unit = C1 (fun _ _ -> val_unit)
 let c2_unit = C2 (fun _ _ _ -> val_unit)
@@ -58,7 +62,7 @@ let set_oo_id =
 
 let int64_float_of_bits = 
   C1 (fun st v ->
-    let p = alloc_block st 1 Instr.black Instr.double_tag in
+    let p = alloc_block st 1L black double_tag in
     set_field st p 0 (field st v 1);
     p)
 
@@ -68,7 +72,7 @@ let open_descriptor =
     if int_val fd < 0L || int_val fd > 2L then failwith "open_descriptor"
     else
       (* allocate a simple custom block for the result storing just the fd *)
-      let p = alloc_block st 2 Instr.white Instr.custom_tag in
+      let p = alloc_block st 2L white custom_tag in
       set_field st p 0 1L;
       set_field st p 1 fd;
       p)
@@ -80,7 +84,7 @@ let output_char =
 
 let string_length = 
   C1 (fun st v ->
-    assert (Instr.string_tag = to_int @@ tag (header st v));
+    assert (string_tag = tag (header st v));
     let size = to_int @@ size (header st v) in
     let pad = to_int @@ shift_right_logical (field st v (size-1)) 56 in
     val_int @@ of_int @@ ((size * 8) - pad - 1)

@@ -75,7 +75,7 @@ type opcodes =
  * we'll do a simple translation into an exe so we can run test sequences 
  * through the testbench *)
 
-type instruction = opcodes * Int32.t list
+type instruction = opcodes * int32 list
 type bytecode = instruction list
 
 let acc0 = ACC0, []
@@ -187,8 +187,8 @@ let pushtrap n = PUSHTRAP, [n]
 let poptrap = POPTRAP, []
 
 let raise_notrace = RAISE_NOTRACE, []
-let reraise = RERAISE
-let raise_ = RAISE
+let reraise = RERAISE, []
+let raise_ = RAISE, []
 
 let check_signals = CHECK_SIGNALS, []
 
@@ -261,23 +261,4 @@ let to_array codes =
       List.map 
         (fun (o,a) -> (Int32.of_int @@ Enum.from_enum<opcodes> o) :: a) 
         codes
-
-(* gc colours *)
-let white = 0
-let gray = 1
-let blue = 2
-let black = 3
-
-(* tags *)
-let lazy_tag = Obj.lazy_tag
-let closure_tag = Obj.closure_tag
-let object_tag = Obj.object_tag
-let infix_tag = Obj.infix_tag
-let forward_tag = Obj.forward_tag
-let no_scan_tag = Obj.no_scan_tag
-let abstract_tag = Obj.abstract_tag
-let string_tag = Obj.string_tag
-let double_tag = Obj.double_tag
-let double_array_tag = Obj.double_array_tag
-let custom_tag = Obj.custom_tag
 

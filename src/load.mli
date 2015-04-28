@@ -16,8 +16,6 @@ type bytecode_exe =
 
 val empty : bytecode_exe
 
-val make_header : int -> int -> int -> int64
-
 type repr64 = 
   [ `f of int64 * int64 array 
   | `b of int64 * repr64 array 

@@ -1,6 +1,8 @@
 (* round robin arbiter *)
 open HardCaml
 
+type 'a prefix = ('a -> 'a -> 'a) -> 'a list -> 'a list
+
 module Make(B : Comb.S) = struct
   open B
 

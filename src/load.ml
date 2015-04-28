@@ -46,30 +46,26 @@ let byte_codes str =
       in
       Array.fold_left Int32.logor 0l a)
 
-let make_header size colour tag = 
-  let open Int64 in
-  logor
-    (shift_left (of_int size) 10)
-    (logor
-      (shift_left (of_int colour) 8)
-      (of_int tag))
-
 type repr64 = 
   [ `f of int64 * int64 array 
   | `b of int64 * repr64 array 
   | `i of int64 ]
 
+module M = Mlvalues.Make(Ops.Int64)
+
 let rec get_repr64 o =
   if Obj.is_block o then
     let tag,size = Obj.tag o, Obj.size o in
     if tag < Obj.no_scan_tag then
-      `b(make_header size Instr.white tag, Array.(init size (fun i -> get_repr64 (Obj.field o i))))
+      `b(M.make_header (Int64.of_int size) M.white (Int64.of_int tag), 
+          Array.(init size (fun i -> get_repr64 (Obj.field o i))))
     else
-      `f(make_header size Instr.white tag, Array.(init size (fun i ->
-        let o = Obj.field o i in
-        let bitlo = if Obj.is_int o then 1L else 0L in
-        let valhi = Int64.of_int (Obj.magic o : int) in
-        Int64.(logor (shift_left valhi 1) bitlo))))
+      `f(M.make_header (Int64.of_int size) M.white (Int64.of_int tag), 
+        Array.(init size (fun i ->
+          let o = Obj.field o i in
+          let bitlo = if Obj.is_int o then 1L else 0L in
+          let valhi = Int64.of_int (Obj.magic o : int) in
+          Int64.(logor (shift_left valhi 1) bitlo))))
   else
     `i Int64.(logor (shift_left (of_int (Obj.magic o : int)) 1) 1L)
 

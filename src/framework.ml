@@ -112,15 +112,18 @@ let make cfg exe =
     let bytecode_address = of_int (bytecode_address * 8) in
     let bytecode_size = of_int (Array.length exe.Load.code * 4) in
 
-    let is_int v = (logand v 1L) <> 0L in
+    (*let is_int v = (logand v 1L) <> 0L in
     let is_block v = not (is_int v) in
+    let tag v = logand v 0xFFL in
+    let size v = shift_right_logical v 10 in*)
+    let module M = Mlvalues.Make(Ops.Int64) in
+    let open M in
+
     let in_program v = 
       (rem v 4L = 0L) && v >= bytecode_address && v < (add bytecode_address bytecode_size)
     in
     let header v = memory.{((to_int v) / 8)-1} in
     let field v i = memory.{((to_int v) / 8)+i} in
-    let tag v = logand v 0xFFL in
-    let size v = shift_right_logical v 10 in
     let codeofs v = div (sub v bytecode_address) 4L in
 
     let get_string v = 
@@ -137,11 +140,11 @@ let make cfg exe =
 
     let trace_val v = 
       printf "0x%Lx" v;
-      if is_int v then printf "=long%Li" (shift_right v 1)
+      if is_int v = 1L then printf "=long%Li" (shift_right v 1)
       else if in_program v then printf "=code%Li" (codeofs v)
-      else if is_block v then begin
+      else if is_block v = 1L then begin
         let h = header v in
-        let tag, size = to_int (tag h), to_int (size h) in
+        let tag, size = tag h, to_int (size h) in
         let dump_fields () = 
           if size <> 0 then begin
             printf "=(";
@@ -153,17 +156,17 @@ let make cfg exe =
           end
         in 
         begin
-          if tag = Instr.closure_tag then 
+          if tag = closure_tag then 
             printf "=closure[s%i,cod%Li]" size (codeofs (field v 0))
-          else if tag = Instr.string_tag then
+          else if tag = string_tag then
             let str = get_string v in
             printf "=string[s%i,L%i]='%s'" size (String.length str) str
-          else if tag = Instr.double_tag then
+          else if tag = double_tag then
             printf "=float[s%i]=%s" size (string_of_float (Int64.float_of_bits (field v 0)))
-          else if tag = Instr.custom_tag then
+          else if tag = custom_tag then
             printf "=custom[s%i]" size
           else
-            printf "=block<T%i/s%i>" tag size
+            printf "=block<T%Li/s%i>" tag size
         end;
         dump_fields()
       end else printf "=unknown"

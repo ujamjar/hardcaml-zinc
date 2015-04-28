@@ -1,5 +1,5 @@
 # OASIS_START
-# DO NOT EDIT (digest: 7b3176640b9d138f3099e75acb2539c9)
+# DO NOT EDIT (digest: 53faa633944077439ae3924250da908e)
 # Ignore VCS directories, you can use the same kind of rule outside
 # OASIS_START/STOP if you want to exclude directories that contains
 # useless stuff for the build process
@@ -17,8 +17,11 @@ true: annot, bin_annot
 # Library HardCamlZinc
 "src/HardCamlZinc.cmxs": use_HardCamlZinc
 "src/arbiter.cmx": for-pack(HardCamlZinc)
+"src/ops.cmx": for-pack(HardCamlZinc)
+"src/mlvalues.cmx": for-pack(HardCamlZinc)
 "src/instr.cmx": for-pack(HardCamlZinc)
 "src/interp.cmx": for-pack(HardCamlZinc)
+"src/interp2.cmx": for-pack(HardCamlZinc)
 "src/load.cmx": for-pack(HardCamlZinc)
 "src/state.cmx": for-pack(HardCamlZinc)
 "src/zinc.cmx": for-pack(HardCamlZinc)
