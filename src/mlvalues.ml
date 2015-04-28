@@ -2,22 +2,22 @@ module Make(M : Ops.S) = struct
 
   open M
 
-  let val_int x = (sll x 1) |: one
+  let val_int x = (sll x one) |: one
   let val_unit = one
   let val_false = one
   let val_true = const 3
-  let int_val x = sra x 1
+  let int_val x = sra x one
 
   let is_int v = v &: one
   let is_block v = (~: v) &: one
 
   let make_header size colour tag = 
-    (sll (tag    &: const 255)  0) |:
-    (sll (colour &: const   3)  8) |:
-    (sll  size                 10) 
+    (sll (tag    &: const 255) (const  0)) |:
+    (sll (colour &: const   3) (const  8)) |:
+    (sll  size                 (const 10)) 
 
-  let size hdr = srl hdr 10
-  let colour hdr = (srl hdr 8) &: (const 3)
+  let size hdr = srl hdr (const 10)
+  let colour hdr = (srl hdr (const 8)) &: (const 3)
   let tag hdr = hdr &: (const 255)
 
   let white = const 0

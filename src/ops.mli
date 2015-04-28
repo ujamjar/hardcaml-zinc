@@ -17,12 +17,18 @@ module type S = sig
   val (^:) : t -> t -> t
   val (~:) : t -> t
 
-  val sll : t -> int -> t
-  val srl : t -> int -> t
-  val sra : t -> int -> t
+  val sll : t -> t -> t
+  val srl : t -> t -> t
+  val sra : t -> t -> t
 
   val (==:) : t -> t -> t
   val (<>:) : t -> t -> t
+
+  val (<+) : t -> t -> t
+  val (<=+) : t -> t -> t
+  val (>+) : t -> t -> t
+  val (>=+) : t -> t -> t
+
   val (<:) : t -> t -> t
   val (<=:) : t -> t -> t
   val (>:) : t -> t -> t

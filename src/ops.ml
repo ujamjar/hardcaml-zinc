@@ -17,12 +17,18 @@ module type S = sig
   val (^:) : t -> t -> t
   val (~:) : t -> t
 
-  val sll : t -> int -> t
-  val srl : t -> int -> t
-  val sra : t -> int -> t
+  val sll : t -> t -> t
+  val srl : t -> t -> t
+  val sra : t -> t -> t
 
   val (==:) : t -> t -> t
   val (<>:) : t -> t -> t
+
+  val (<+) : t -> t -> t
+  val (<=+) : t -> t -> t
+  val (>+) : t -> t -> t
+  val (>=+) : t -> t -> t
+
   val (<:) : t -> t -> t
   val (<=:) : t -> t -> t
   val (>:) : t -> t -> t
@@ -52,16 +58,23 @@ module Int64 = struct
   let ( ^: ) a b = logxor a b
   let ( ~: ) a   = lognot a
 
-  let sll a b = shift_left a b
-  let srl a b = shift_right_logical a b
-  let sra a b = shift_right a b
+  let sll a b = shift_left a (to_int b)
+  let srl a b = shift_right_logical a (to_int b)
+  let sra a b = shift_right a (to_int b)
 
   let (==:) a b = if a = b then 1L else 0L
   let (<>:) a b = if a <> b then 1L else 0L
-  let (<:)  a b = if Int64.compare a b = (-1) then 1L else 0L
-  let (<=:) a b = if Int64.compare a b <= 0 then 1L else 0L
-  let (>:)  a b = if Int64.compare a b = 1 then 1L else 0L
-  let (>=:) a b = if Int64.compare a b >= 0 then 1L else 0L
+
+  let (<+)  a b = if Int64.compare a b = (-1) then 1L else 0L
+  let (<=+) a b = if Int64.compare a b <= 0 then 1L else 0L
+  let (>+)  a b = if Int64.compare a b = 1 then 1L else 0L
+  let (>=+) a b = if Int64.compare a b >= 0 then 1L else 0L
+
+  let mask = 0x8000_0000_0000_0000L
+  let (<:)  a b = (a ^: mask) <+  (b ^: mask)
+  let (<=:) a b = (a ^: mask) <=+ (b ^: mask)
+  let (>:)  a b = (a ^: mask) >+  (b ^: mask)
+  let (>=:) a b = (a ^: mask) >=+ (b ^: mask)
 
 end
 

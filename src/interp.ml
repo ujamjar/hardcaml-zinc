@@ -11,8 +11,8 @@ type state =
 
 include Mlvalues.Make(Ops.Int64)
 
-let mofs addr = srl addr 3
-let aofs x = sll x 3
+let mofs addr = srl addr 3L
+let aofs x = sll x 3L
 
 let header memory ptr = memory.{ Int64.to_int (mofs ptr -: 1L) }
 let field memory ptr field = memory.{ Int64.to_int (mofs ptr +: field) }
@@ -26,7 +26,7 @@ let header_tag memory ptr = tag (header memory ptr)
 let fetch memory pc = 
   let ins = memory.{ Int64.to_int (mofs pc) } in
   let sel = pc &: 4L in
-  sra (if sel = 0L then sll ins 32 else ins) 32
+  sra (if sel = 0L then sll ins 32L else ins) 32L
 
 let read_stack memory sp ofs = memory.{ Int64.to_int ((mofs sp) +: ofs) }
 let write_stack memory sp ofs v = memory.{ Int64.to_int ((mofs sp) +: ofs) } <- v
@@ -404,9 +404,9 @@ let step exe memory state =
   | ANDINT -> state.accu <- state.accu &: pop_stack()
   | ORINT -> state.accu <- state.accu |: pop_stack()
   | XORINT -> state.accu <- (state.accu ^: pop_stack()) |: 1L
-  | LSLINT -> state.accu <- (sll (state.accu -: 1L) (Int64.to_int (pop_stack()))) +: 1L
-  | LSRINT -> state.accu <- (srl (state.accu -: 1L) (Int64.to_int (pop_stack()))) |: 1L
-  | ASRINT -> state.accu <- (sra (state.accu -: 1L) (Int64.to_int (pop_stack()))) |: 1L
+  | LSLINT -> state.accu <- (sll (state.accu -: 1L) (pop_stack())) +: 1L
+  | LSRINT -> state.accu <- (srl (state.accu -: 1L) (pop_stack())) |: 1L
+  | ASRINT -> state.accu <- (sra (state.accu -: 1L) (pop_stack())) |: 1L
   | EQ -> int_comp (=)
   | NEQ -> int_comp (<>)
   | LTINT -> int_comp (<)
@@ -423,8 +423,8 @@ let step exe memory state =
   | BGEINT -> int_bcomp (>=)
   | BULTINT -> uint_bcomp (<)
   | BUGEINT -> uint_bcomp (>=)
-  | OFFSETINT -> state.accu <- state.accu +: (sll (pop_arg()) 1)
-  | OFFSETREF -> set_field state.accu 0L (field state.accu 0L +: (sll (pop_arg()) 1))
+  | OFFSETINT -> state.accu <- state.accu +: (sll (pop_arg()) 1L)
+  | OFFSETREF -> set_field state.accu 0L (field state.accu 0L +: (sll (pop_arg()) 1L))
   | ISINT -> state.accu <- int_val (state.accu &: 1L)
   | GETMETHOD -> failwith "GETMETHOD"
   | GETPUBMET -> failwith "GETPUBMET"

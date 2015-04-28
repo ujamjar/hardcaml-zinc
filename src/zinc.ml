@@ -461,6 +461,9 @@ module M = Mlvalues.Make(struct
   let const = consti dbits
   let zero = const 0
   let one = const 1
+  let sll = log_shift sll
+  let srl = log_shift srl
+  let sra = log_shift sra
 end)
 
 let zinc i = 
