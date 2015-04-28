@@ -16,7 +16,7 @@ Library HardCamlZinc
   Path:          src
   Findlibname:   hardcaml-zinc
   Pack:          true
-  Modules:       Arbiter, Instr, Load, State, Zinc, C_runtime, Framework
+  Modules:       Arbiter, Instr, Interp, Load, State, Zinc, C_runtime, Framework
   BuildDepends:  compiler-libs.bytecomp, bigarray,
     hardcaml, hardcaml-waveterm.lterm, hardcaml-llvmsim, hardcaml-examples, 
     hardcaml.syntax, deriving.syntax
