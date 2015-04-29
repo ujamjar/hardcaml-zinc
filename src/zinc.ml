@@ -461,9 +461,14 @@ module M = Mlvalues.Make(struct
   let const = consti dbits
   let zero = const 0
   let one = const 1
-  let sll = log_shift sll
-  let srl = log_shift srl
-  let sra = log_shift sra
+
+  let log_shift f a b = 
+    if Signal.Types.is_const b then f a (to_int b)
+    else log_shift f a b
+
+  let sll a b = log_shift sll a b.[5:0]
+  let srl a b = log_shift srl a b.[5:0]
+  let sra a b = log_shift sra a b.[5:0]
 end)
 
 let zinc i = 
