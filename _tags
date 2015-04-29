@@ -1,5 +1,5 @@
 # OASIS_START
-# DO NOT EDIT (digest: caff5287f7f58fae822a5b7f4fc2365a)
+# DO NOT EDIT (digest: 375b10521f948f3e35d4b1d2b7ddda54)
 # Ignore VCS directories, you can use the same kind of rule outside
 # OASIS_START/STOP if you want to exclude directories that contains
 # useless stuff for the build process
@@ -57,6 +57,17 @@ true: annot, bin_annot
 <test/codes.{native,byte}>: pkg_hardcaml-waveterm.lterm
 <test/codes.{native,byte}>: pkg_hardcaml.syntax
 <test/codes.{native,byte}>: use_HardCamlZinc
+# Executable monadinterp
+<test/monadinterp.{native,byte}>: pkg_bigarray
+<test/monadinterp.{native,byte}>: pkg_compiler-libs.bytecomp
+<test/monadinterp.{native,byte}>: pkg_deriving.runtime
+<test/monadinterp.{native,byte}>: pkg_deriving.syntax
+<test/monadinterp.{native,byte}>: pkg_hardcaml
+<test/monadinterp.{native,byte}>: pkg_hardcaml-examples
+<test/monadinterp.{native,byte}>: pkg_hardcaml-llvmsim
+<test/monadinterp.{native,byte}>: pkg_hardcaml-waveterm.lterm
+<test/monadinterp.{native,byte}>: pkg_hardcaml.syntax
+<test/monadinterp.{native,byte}>: use_HardCamlZinc
 <test/*.ml{,i,y}>: pkg_bigarray
 <test/*.ml{,i,y}>: pkg_compiler-libs.bytecomp
 <test/*.ml{,i,y}>: pkg_deriving.runtime

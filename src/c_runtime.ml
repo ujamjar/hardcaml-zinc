@@ -17,7 +17,7 @@ type c_call =
   | CN
 
 open Int64
-
+open Ops.Int64
 include Mlvalues.Make(Ops.Int64)
 
 (* maintain a small seperate heap section of c-allocation *)
@@ -107,6 +107,16 @@ let output_string =
     output_substring stdout str (to_int @@ int_val ofs) (to_int @@ int_val len);
     val_unit)
 
+let out_chan_list = C1 (fun st _ -> val_unit)
+
+
+let alloc_string = 
+  C1 (fun st len ->
+    let len = to_int len in
+    let size = (len + 8) / 8 in
+    let p = alloc_block st (of_int size) white string_tag in
+    set_field st p (size-1) (sll (of_int (size*8 - len)) 56L);
+    p)
 
 let c_calls = [
   "caml_register_named_value", c2_unit;
@@ -117,6 +127,8 @@ let c_calls = [
   "caml_ml_output_char", output_char;
   "caml_ml_string_length", string_length;
   "caml_ml_output", output_string;
+  "caml_ml_out_channels_list", out_chan_list;
+  "caml_create_string", alloc_string;
 ]
 
 let run bc prim st =

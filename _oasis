@@ -43,6 +43,13 @@ Executable codes
   Install:            false
   BuildDepends:       hardcaml-zinc, deriving.runtime
 
+Executable monadinterp
+  Path:               test
+  MainIs:             monadinterp.ml
+  CompiledObject:     best
+  Install:            false
+  BuildDepends:       hardcaml-zinc, deriving.runtime
+
 SourceRepository master
   Type:     git
   Location: https://github.com/ujamjar/hardcaml-zinc.git

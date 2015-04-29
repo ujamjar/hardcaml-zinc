@@ -19,9 +19,28 @@
  *  - need to do something on stop
  *)
 
-type machine_register = [ `accu | `env | `pc | `sp | `extra_args 
-                        | `global_data | `atom_table ]
+type machine_register = 
+  (* zinc registers *)
+  [ `accu | `env | `pc | `sp | `extra_args | `trapsp
+  (* other state *)
+  | `global_data | `atom_table | `alloc_base ]
 type cache = [ `stack | `program | `mem ]
+
+let string_of_mach_reg = function
+  | `accu -> "accu"
+  | `env -> "env"
+  | `pc -> "pc"
+  | `sp -> "sp"
+  | `extra_args -> "extra_args"
+  | `trapsp -> "trapsp"
+  | `global_data -> "global_data"
+  | `atom_table -> "atom_table"
+  | `alloc_base -> "alloc_base"
+
+let string_of_cache = function
+  | `stack -> "stack"
+  | `program -> "program"
+  | `mem -> "mem"
 
 module type State = sig
 
@@ -42,40 +61,56 @@ module type State = sig
   val get_mem : st -> cache -> t -> t * st
   val set_mem : st -> cache -> t -> t -> st
 
+  (* c-calls *)
+
+  val c_call : t -> st -> t * st
+
   (* control *)
   
   val cond : st -> t -> (st -> unit * st) -> (st -> unit * st) -> st
   val iter_up : st -> t -> t -> (t -> st -> unit * st) -> st
   val iter_dn : st -> t -> t -> (t -> st -> unit * st) -> st
 
+  (* debugging *)
+
+  val string_of_value : t -> string
+
 end
 
 module State_eval = struct
 
-  let mem_size = 16
-
   type st = 
     {
+      (* zinc registers *)
       accu : int64;
       env : int64;
       pc : int64;
       sp : int64;
       extra_args : int64;
+      trapsp : int64;
+      (* other state *)
       global_data : int64;
       atom_table : int64;
-      memory : int64 array;
+      alloc_base : int64;
+      (* memory *)
+      memory : (int64, Bigarray.int64_elt, Bigarray.c_layout) Bigarray.Array1.t;
+      (* executable *)
+      exe : Load.bytecode_exe;
     }
 
   let initial () = 
     {
-      accu = 0L;
+      accu = 1L;
       env = 0L;
       pc = 0L;
-      sp = Int64.of_int (8*mem_size);
+      sp = 0L;
       extra_args = 0L;
+      trapsp = 0L;
       global_data = 0L;
       atom_table = 0L;
-      memory = Array.init mem_size (fun i -> Int64.of_int i);
+      alloc_base = 0L;
+      memory = Bigarray.(Array1.create int64 c_layout 0);
+      exe = Load.empty;
     }
 
   let get_reg st r = 
@@ -85,8 +120,10 @@ module State_eval = struct
     | `pc -> st.pc, st
     | `sp -> st.sp, st
     | `extra_args -> st.extra_args, st
+    | `trapsp -> st.trapsp, st
     | `global_data -> st.global_data, st
     | `atom_table -> st.atom_table, st
+    | `alloc_base -> st.alloc_base, st
 
   let set_reg st r v = 
     match r with
@@ -95,27 +132,40 @@ module State_eval = struct
     | `pc -> { st with pc = v } 
     | `sp -> { st with sp = v }
     | `extra_args -> { st with extra_args = v }
-    | `global_data -> failwith "cannot write to global data"
-    | `atom_table -> failwith "cannot write to atom table"
+    | `trapsp -> { st with trapsp = v }
+    | `global_data -> failwith "cannot write to global data pointer"
+    | `atom_table -> failwith "cannot write to atom table pointer"
+    | `alloc_base -> { st with alloc_base = v }
 
   let get_mem st cache adr = 
     try
-      st.memory.(Int64.to_int adr), st
+      st.memory.{Int64.to_int adr}, st
     with Invalid_argument x ->
-      raise (Invalid_argument ("get_mem [" ^ Int64.to_string adr ^ "] " ^ x))
+      raise (Invalid_argument ("get_mem {" ^ Int64.to_string adr ^ "} " ^ x))
 
   let set_mem st cache adr v = 
     try
-      st.memory.(Int64.to_int adr) <- v; st 
+      st.memory.{Int64.to_int adr} <- v; st 
     with Invalid_argument x ->
-      raise (Invalid_argument ("set_mem [" ^ Int64.to_string adr ^ "] " ^ x))
+      raise (Invalid_argument ("set_mem {" ^ Int64.to_string adr ^ "} " ^ x))
+
+  let c_call prim st = 
+    (C_runtime.(run 
+      st.exe
+      (Int64.to_int prim)
+      {
+        env=st.env;
+        accu=st.accu;
+        sp=Int64.to_int st.sp;
+        memory=st.memory;
+      }), st)
 
   let cond st c t f = 
     snd @@ if c <> 0L then t st else f st
 
   let iter_up st m n f = 
     let rec g st i = 
-      if i > n then st
+      if i >= n then st
       else
         let _, st = f i st in
         g st (Int64.add i 1L)
@@ -133,6 +183,8 @@ module State_eval = struct
 
   include Ops.Int64
 
+  let string_of_value = Int64.to_string
+
 end
 
 module State_poly = struct
@@ -144,10 +196,12 @@ module State_poly = struct
     | Set_mem of cache * t * t
     | Cond of t * cmd list * cmd list
     | Iter of bool * int * t * t * cmd list
+    | C_call of t 
   and t = 
     | Op of string * t * t
     | Val of int
     | Const of int
+    | C_call_result 
   and st = 
     {
       id : int;
@@ -171,6 +225,8 @@ module State_poly = struct
     (Val st.id), { id=st.id+1; cmd=x::st.cmd }
 
   let set_mem st c adr v = { st with cmd = Set_mem(c, adr, v) :: st.cmd }
+
+  let c_call prim st = (C_call_result, { st with cmd = C_call(prim) :: st.cmd })
 
   let cond st c t f = 
     let (),st_t = t {id = st.id; cmd = []} in
@@ -216,24 +272,11 @@ module State_poly = struct
   let (>:)  a b = Op(">",  a, b)
   let (>=:) a b = Op(">=", a, b)
 
-  let string_of_mach_reg = function
-    | `accu -> "accu"
-    | `env -> "env"
-    | `pc -> "pc"
-    | `sp -> "sp"
-    | `extra_args -> "extra_args"
-    | `global_data -> "global_data"
-    | `atom_table -> "atom_table"
-
-  let string_of_cache = function
-    | `stack -> "stack"
-    | `program -> "program"
-    | `mem -> "mem"
-
   let rec string_of_value = function
     | Op(o,a,b) -> "(" ^ string_of_value a ^ o ^ string_of_value b ^ ")"
     | Val(i) -> "_" ^ string_of_int i
     | Const i -> string_of_int i
+    | C_call_result -> "c_call_result"
 
   let rec print lev st = 
     let open Printf in
@@ -255,6 +298,8 @@ module State_poly = struct
           (if d then "to" else "downto") (string_of_value n);
         print (lev+2) b;
         printf "%sdone\n" pad
+      | C_call(prim) ->
+        printf "%sc_call prim=%s\n" pad (string_of_value prim)
       )
       (List.rev st)
 
@@ -278,6 +323,9 @@ module type Monad = sig
   val run : 'a t -> 'a * S.st
   val step : S.st -> 'a t -> S.st
 
+  val trace : bool
+  val debug : string -> unit t
+
   val write_reg : machine_register -> S.t -> unit t
   val read_reg : machine_register -> S.t t
   val modify_reg : machine_register -> (S.t -> S.t) -> unit t
@@ -285,11 +333,13 @@ module type Monad = sig
   val read_mem : cache -> S.t -> S.t t
   val write_mem : cache -> S.t -> S.t -> unit t
 
+  val c_call : S.t -> S.t t
+
   val read_bytecode : S.t -> S.t t
 
 end 
   
-module Monad(S : State) = struct
+module Monad(T : sig val trace : bool end)(S : State) = struct
   module S = S
 
   type 'a t = S.st -> ('a * S.st)
@@ -308,6 +358,8 @@ module Monad(S : State) = struct
   let (>>=) = bind
   let (>>) m f = bind m (fun _ -> f)
 
+  let debug s st = ((output_string stdout s; flush stdout), st)
+
   let if_ c t f st = 
     ((), S.cond st c t f)
 
@@ -318,9 +370,6 @@ module Monad(S : State) = struct
 
   let write_reg r v st = ((), S.set_reg st r v)
 
-  let modify_reg r f = 
-    read_reg r >>= fun v -> write_reg r (f v)
-
   let c3, c32 = S.const 3, S.const 32
 
   let read_mem cache adr st = 
@@ -329,6 +378,8 @@ module Monad(S : State) = struct
   let write_mem cache adr value st = 
     ((), S.set_mem st cache (S.srl adr c3) value)
 
+  let c_call prim st = S.c_call prim st
+
   (* move logic into state *)
   let read_bytecode adr st = 
     let open S in
@@ -336,6 +387,79 @@ module Monad(S : State) = struct
     let sel = adr &: (const 4) in
     let ins = sra (if sel = zero then sll ins c32 else ins) c32 in
     (ins, st)
+
+  (* XXX DEBUG XXX *)
+  let trace = T.trace
+
+  let read_reg arg = 
+    if trace then
+      read_reg arg >>= fun v -> 
+      debug ("read_reg " ^ string_of_mach_reg arg ^ " " ^ S.string_of_value v ^ "\n") >> 
+      return v
+    else
+      read_reg arg
+
+  let write_reg arg v = 
+    if trace then
+      debug ("write_reg " ^ string_of_mach_reg arg ^ " " ^ 
+                            S.string_of_value v ^"\n") >> write_reg arg v
+    else
+      write_reg arg v
+
+  let read_mem cache adr = 
+    if trace then
+      read_mem cache adr >>= fun v ->
+      debug ("read_mem " ^ string_of_cache cache ^ " " ^ S.string_of_value adr ^ 
+                                                   " " ^ S.string_of_value v ^ "\n") >>
+      return v
+    else
+      read_mem cache adr
+
+  let write_mem cache adr v = 
+    if trace then
+      debug ("write_mem " ^ string_of_cache cache ^ " " ^ S.string_of_value adr ^ 
+                                                    " " ^ S.string_of_value v ^ "\n") >>
+      write_mem cache adr v
+    else
+      write_mem cache adr v
+
+  let if_ c a b = 
+    if trace then debug ("if_ " ^ S.string_of_value c ^ "\n") >> if_ c a b
+    else if_ c a b
+
+  let for_up m n f = 
+    if trace then
+      debug ("for_up " ^ S.string_of_value m ^ ".." ^ S.string_of_value n ^ "\n") >>
+      for_up m n f
+    else
+      for_up m n f
+
+  let for_dn m n f = 
+    if trace then
+      debug ("for_dn " ^ S.string_of_value m ^ ".." ^ S.string_of_value n ^ "\n") >>
+      for_dn m n f
+    else
+      for_dn m n f
+
+  let c_call prim = 
+    if trace then
+      debug ("c_call prim=%i\n" ^ S.string_of_value prim ^ "\n") >>
+      c_call prim
+    else
+      c_call prim
+
+  let read_bytecode adr = 
+    if trace then
+      read_bytecode adr >>= fun v ->
+      debug ("read_bytecode " ^ S.string_of_value adr ^ " " ^ S.string_of_value v ^ "\n") >>
+      return v
+    else
+      read_bytecode adr
+
+  (* derived *)
+
+  let modify_reg r f = 
+    read_reg r >>= fun v -> write_reg r (f v)
 
 end 
 
@@ -347,13 +471,8 @@ module Opcodes(M : Monad) = struct
   (******************************************************************)
   (* utils *)
 
-  let incr r n = 
-    read_reg r >>= fun v -> 
-    write_reg r (v +: n)
-
-  let decr r n = 
-    read_reg r >>= fun v ->
-    write_reg r (v -: n)
+  let incr r n = modify_reg r (fun v -> v +: n)
+  let decr r n = modify_reg r (fun v -> v -: n)
 
   let incr_sp = incr `sp (const 8)
   let decr_sp = decr `sp (const 8)
@@ -364,6 +483,7 @@ module Opcodes(M : Monad) = struct
   let c2, c3 = const 2, const 3
 
   let aofs x = sll x c3
+  let pcofs x = sll x c2
   let mofs x = srl x c3
 
   let read_bytecode ofs = 
@@ -372,11 +492,11 @@ module Opcodes(M : Monad) = struct
 
   let read_stack ofs = 
     read_reg `sp >>= fun sp -> 
-    read_mem `stack (sp +: ofs)
+    read_mem `stack (sp +: aofs ofs)
 
   let write_stack ofs value = 
     read_reg `sp >>= fun sp ->
-    write_mem `stack (sp +: ofs) value
+    write_mem `stack (sp +: aofs ofs) value
 
   let push_stack value = 
     decr_sp >> write_stack zero value
@@ -416,13 +536,30 @@ module Opcodes(M : Monad) = struct
 
   let modify_field = set_field
 
-  let alloc size tag = return zero
+  let alloc size tag = 
+    read_reg `alloc_base >>= fun base ->
+    write_reg `alloc_base (base +: aofs (size +: one)) >>
+    write_mem `mem base (make_header size white tag) >>
+    return (base +: aofs one)
 
   let check_stacks = return ()
 
   let not_implemented = return ()
 
   let raise_error _ = return ()
+
+  let something_to_do e = e
+
+  (******************************************************************)
+  (* XXX DEBUG XXX *)
+
+  let alloc size tag = 
+    if trace then debug ("alloc " ^ string_of_value size ^ "\n") >> alloc size tag
+    else alloc size tag
+
+  let pop_arg = 
+    if trace then debug ("pop_arg\n") >> pop_arg 
+    else pop_arg
 
   (******************************************************************)
   (* Basic stack operations *)
@@ -450,18 +587,18 @@ module Opcodes(M : Monad) = struct
       Next;
   *)
 
-  let acc i = read_stack i >>= write_reg `accu 
+  let accn i = read_stack i >>= write_reg `accu 
 
-  let acc_arg = pop_arg >>= acc
+  let acc = pop_arg >>= accn
 
   let push = push_stack_accu
 
-  let pushacc arg = 
+  let pushaccn arg = 
     push_stack_accu >>
     read_stack arg >>= fun data ->
     write_reg `accu data
 
-  let pushacc_arg = pop_arg >>= pushacc
+  let pushacc = pop_arg >>= pushaccn
 
   (*
     Instruct(POP):
@@ -504,14 +641,14 @@ module Opcodes(M : Monad) = struct
       accu = Field(env, *pc++);
       Next;
   *)
-  let envacc i = 
+  let envaccn i = 
     read_reg `env >>= fun ptr -> field ptr i >>= write_reg `accu
 
-  let envacc_arg = pop_arg >>= envacc
+  let envacc = pop_arg >>= envaccn
 
-  let pushenvacc i = push_stack_accu >> envacc i
+  let pushenvaccn i = push_stack_accu >> envaccn i
 
-  let pushenvacc_arg = pop_arg >>= pushenvacc
+  let pushenvacc = pop_arg >>= pushenvaccn
   
   (************************************************************)
   (* Function application *)
@@ -530,7 +667,7 @@ module Opcodes(M : Monad) = struct
     read_reg `extra_args >>= fun eargs -> push_stack (val_int eargs) >>
     read_reg `env >>= push_stack >>
     read_reg `pc >>= fun pc -> pop_arg >>= fun ofs -> 
-    push_stack (pc +: (aofs ofs))
+    push_stack (pc +: (pcofs ofs))
 
   (*
     Instruct(APPLY): {
@@ -624,8 +761,8 @@ module Opcodes(M : Monad) = struct
   let apptermn n = 
     pop_stack_n n >>= fun args ->
     pop_arg >>= fun ofs ->
-    modify_reg `sp (fun sp -> sp +: ofs -: const n) >>
-    push_stack_n args >>
+    modify_reg `sp (fun sp -> sp +: aofs (ofs -: const n)) >>
+    push_stack_n (List.rev args) >>
     read_reg `accu >>= fun accu -> read_mem `mem accu >>= write_reg `pc >>
     write_reg `env accu >>
     modify_reg `extra_args (fun earg -> earg +: const (n-1)) >>
@@ -648,7 +785,7 @@ module Opcodes(M : Monad) = struct
     }
   *)
   let return_ =
-    pop_arg >>= fun ofs -> modify_reg `sp (fun sp -> sp +: ofs) >>
+    pop_arg >>= fun ofs -> modify_reg `sp (fun sp -> sp +: aofs ofs) >>
     read_reg `extra_args >>= fun earg ->
     if_ (earg >+ zero) begin
       modify_reg `extra_args (fun earg -> earg -: one) >>
@@ -715,7 +852,7 @@ module Opcodes(M : Monad) = struct
         (fun i -> pop_stack >>= set_field ptr (i +: (const 2))) >>
       read_reg `pc >>= fun pc -> 
       read_reg `accu >>= fun accu ->
-      write_mem `mem accu (pc -: (aofs (const 3))) >>
+      write_mem `mem accu (pc -: (pcofs (const 3))) >>
       pop_stack >>= write_reg `env >>
       pop_stack >>= fun earg -> write_reg `extra_args (int_val earg)
     end
@@ -753,7 +890,8 @@ module Opcodes(M : Monad) = struct
       (fun i -> pop_stack >>= set_field ptr (i +: one)) >>
     pop_arg >>= fun ofs -> 
     read_reg `pc >>= fun pc ->
-    write_reg `accu (pc +: (aofs ofs))
+    write_mem `mem ptr (pc +: pcofs (ofs -: one)) >> (* need -1 because we've popped from pc *)
+    write_reg `accu ptr
 
   (*
     Instruct(CLOSUREREC): {
@@ -803,13 +941,13 @@ module Opcodes(M : Monad) = struct
       (fun i -> pop_stack >>= set_field ptr ((sll nfuncs one) -: one +: i)) >>
     read_reg `pc >>= fun pc ->
     pop_arg >>= fun ofs ->
-    set_field ptr zero (pc +: (aofs ofs)) >>
+    set_field ptr zero (pc +: (pcofs ofs)) >>
     push_stack ptr >>
     for_up one nfuncs
       (fun i -> 
         let i2 = sll i one in
         set_field ptr (one +: i2) (make_header i2 white infix_tag) >>
-        pop_arg >>= fun ofs -> set_field ptr ((const 2) +: i2) (pc +: (aofs ofs)) >>
+        pop_arg >>= fun ofs -> set_field ptr ((const 2) +: i2) (pc +: (pcofs ofs)) >>
         push_stack (ptr +: (aofs (one +: i2)))) >>
     write_reg `accu ptr
   
@@ -921,7 +1059,9 @@ module Opcodes(M : Monad) = struct
     Instruct(ATOM):
       accu = Atom( *pc++); Next;
   *)
-  let atom' ofs = read_reg `atom_table >>= fun atom -> header (atom +: aofs ofs)
+  let atom' ofs = 
+    read_reg `atom_table >>= fun atom -> 
+    write_reg `accu (atom +: aofs ofs)
 
   let atom0 = atom' zero
 
@@ -1015,8 +1155,7 @@ module Opcodes(M : Monad) = struct
   *)
   let getfieldn n = 
     read_reg `accu >>= fun accu ->
-    pop_arg >>= fun fld ->
-    field accu fld >>= write_reg `accu
+    field accu n >>= write_reg `accu
 
   let getfield = pop_arg >>= getfieldn
 
@@ -1105,7 +1244,7 @@ module Opcodes(M : Monad) = struct
       pc += *pc;
       Next;
   *)
-  let branch = read_bytecode zero >>= write_reg `pc
+  let branch = read_bytecode zero >>= fun ofs -> modify_reg `pc (fun pc -> pc +: pcofs ofs)
 
   (*
     Instruct(BRANCHIF):
@@ -1138,9 +1277,16 @@ module Opcodes(M : Monad) = struct
   (************************************************************)
   (* Exceptions *)
 
-  let pushtrap = not_implemented
+  let pushtrap = 
+    pop_arg >>= fun ofs -> read_reg `pc >>= fun pc -> push_stack (pc +: pcofs ofs) >>
+    read_reg `trapsp >>= push_stack >>
+    read_reg `env >>= push_stack >>
+    read_reg `extra_args >>= fun earg -> push_stack (val_int earg) >>
+    copy_modify_reg `sp `trapsp (fun d -> d)
 
-  let poptrap = not_implemented
+  let poptrap = 
+    something_to_do 
+      (read_stack one >>= write_reg `trapsp >> incr `sp (aofs (const 4))) 
 
   let raise_notrace = not_implemented
 
@@ -1176,6 +1322,7 @@ module Opcodes(M : Monad) = struct
     pop_arg >>= fun prim ->
     read_reg `env >>= push_stack >>
     (* XXX DO CALL somehow ... *)
+    c_call prim >>= write_reg `accu >>
     pop_stack >>= write_reg `env >>
     modify_reg `sp (fun sp -> sp +: (aofs n))
 
@@ -1197,7 +1344,7 @@ module Opcodes(M : Monad) = struct
     Instruct(PUSHCONST3):
       *--sp = accu; accu = Val_int(3); Next;
   *)
-  let constn n = write_reg `accu n
+  let constn n = write_reg `accu (val_int n)
   
   let pushconstn n = push_stack_accu >> constn n
 
@@ -1325,7 +1472,7 @@ module Opcodes(M : Monad) = struct
   let int_bcomp f = 
     pop_arg >>= fun a -> read_reg `accu >>= fun b ->
     if_ (f a (int_val b))
-      (read_bytecode zero >>= fun ofs -> modify_reg `pc (fun pc -> pc +: (aofs ofs)))
+      (read_bytecode zero >>= fun ofs -> modify_reg `pc (fun pc -> pc +: (pcofs ofs)))
       incr_pc
 
   let beq = int_bcomp (==:)
@@ -1373,7 +1520,7 @@ module Opcodes(M : Monad) = struct
       accu = Val_long(accu & 1);
       Next;
   *)
-  let is_int = modify_reg `accu (fun accu -> val_int (accu &: one))
+  let isint = modify_reg `accu (fun accu -> val_int (accu &: one))
 
   (************************************************************)
   (* Object-oriented operations *)
@@ -1393,20 +1540,201 @@ module Opcodes(M : Monad) = struct
 
   let break = not_implemented
 
+  (************************************************************)
+
+  let dispatch = function
+    | Instr.ACC0 -> accn (const 0)
+    | Instr.ACC1 -> accn (const 1)
+    | Instr.ACC2 -> accn (const 2)
+    | Instr.ACC3 -> accn (const 3)
+    | Instr.ACC4 -> accn (const 4)
+    | Instr.ACC5 -> accn (const 5)
+    | Instr.ACC6 -> accn (const 6)
+    | Instr.ACC7 -> accn (const 7)
+    | Instr.ACC -> acc
+  
+    | Instr.PUSH -> push
+    | Instr.PUSHACC0 -> pushaccn (const 0)
+    | Instr.PUSHACC1 -> pushaccn (const 1) 
+    | Instr.PUSHACC2 -> pushaccn (const 2) 
+    | Instr.PUSHACC3 -> pushaccn (const 3) 
+    | Instr.PUSHACC4 -> pushaccn (const 4) 
+    | Instr.PUSHACC5 -> pushaccn (const 5) 
+    | Instr.PUSHACC6 -> pushaccn (const 6) 
+    | Instr.PUSHACC7 -> pushaccn (const 7) 
+    | Instr.PUSHACC -> pushacc
+  
+    | Instr.POP -> pop
+    | Instr.ASSIGN -> assign
+
+    | Instr.ENVACC1 -> envaccn (const 1)
+    | Instr.ENVACC2 -> envaccn (const 2)
+    | Instr.ENVACC3 -> envaccn (const 3)
+    | Instr.ENVACC4 -> envaccn (const 4)
+    | Instr.ENVACC -> envacc
+    
+    | Instr.PUSHENVACC1 -> pushenvaccn (const 1)
+    | Instr.PUSHENVACC2 -> pushenvaccn (const 2)
+    | Instr.PUSHENVACC3 -> pushenvaccn (const 3)
+    | Instr.PUSHENVACC4 -> pushenvaccn (const 4)
+    | Instr.PUSHENVACC -> pushenvacc
+    
+    | Instr.PUSH_RETADDR -> push_retaddr
+    
+    | Instr.APPLY -> apply
+    | Instr.APPLY1 -> applyn 1
+    | Instr.APPLY2 -> applyn 2 
+    | Instr.APPLY3 -> applyn 3 
+    
+    | Instr.APPTERM -> appterm
+    | Instr.APPTERM1 -> apptermn 1
+    | Instr.APPTERM2 -> apptermn 2
+    | Instr.APPTERM3 -> apptermn 3
+    
+    | Instr.RETURN -> return_
+    | Instr.RESTART -> restart
+    | Instr.GRAB -> grab
+    | Instr.CLOSURE -> closure
+    | Instr.CLOSUREREC -> closurerec
+    
+    | Instr.OFFSETCLOSUREM2 -> offsetclosurem2
+    | Instr.OFFSETCLOSURE0 -> offsetclosure0
+    | Instr.OFFSETCLOSURE2 -> offsetclosure2
+    | Instr.OFFSETCLOSURE -> offsetclosure
+
+    | Instr.PUSHOFFSETCLOSUREM2 -> pushoffsetclosurem2 
+    | Instr.PUSHOFFSETCLOSURE0 -> pushoffsetclosure0
+    | Instr.PUSHOFFSETCLOSURE2 -> pushoffsetclosure2
+    | Instr.PUSHOFFSETCLOSURE -> pushoffsetclosure 
+    
+    | Instr.GETGLOBAL -> getglobal
+    | Instr.PUSHGETGLOBAL -> pushgetglobal
+    | Instr.GETGLOBALFIELD -> getglobalfield
+    | Instr.PUSHGETGLOBALFIELD -> pushgetglobalfield
+    | Instr.SETGLOBAL -> setglobal
+    
+    | Instr.ATOM0 -> atom0
+    | Instr.ATOM -> atom
+    
+    | Instr.PUSHATOM0 -> pushatom0
+    | Instr.PUSHATOM -> pushatom
+    
+    | Instr.MAKEBLOCK -> makeblock
+    | Instr.MAKEBLOCK1 -> makeblockn (const 1)
+    | Instr.MAKEBLOCK2 -> makeblockn (const 2)
+    | Instr.MAKEBLOCK3 -> makeblockn (const 3)
+    | Instr.MAKEFLOATBLOCK -> makefloatblock
+    
+    | Instr.GETFIELD0 -> getfieldn (const 0)
+    | Instr.GETFIELD1 -> getfieldn (const 1)
+    | Instr.GETFIELD2 -> getfieldn (const 2)
+    | Instr.GETFIELD3 -> getfieldn (const 3)
+    | Instr.GETFIELD -> getfield
+    | Instr.GETFLOATFIELD -> getfloatfield
+
+    | Instr.SETFIELD0 -> setfieldn (const 0)
+    | Instr.SETFIELD1 -> setfieldn (const 1) 
+    | Instr.SETFIELD2 -> setfieldn (const 2) 
+    | Instr.SETFIELD3 -> setfieldn (const 3) 
+    | Instr.SETFIELD -> setfield
+    | Instr.SETFLOATFIELD -> setfloatfield 
+    
+    | Instr.VECTLENGTH -> vectlength
+    | Instr.GETVECTITEM -> getvectitem
+    | Instr.SETVECTITEM -> setvectitem
+    
+    | Instr.GETSTRINGCHAR -> getstringchar
+    | Instr.SETSTRINGCHAR -> setstringchar
+    
+    | Instr.BRANCH -> branch
+    | Instr.BRANCHIF -> branchif
+    | Instr.BRANCHIFNOT -> branchifnot
+    | Instr.SWITCH -> switch
+    
+    | Instr.BOOLNOT -> boolnot
+    
+    | Instr.PUSHTRAP -> pushtrap
+    | Instr.POPTRAP -> poptrap
+    | Instr.RAISE -> raise_
+    
+    | Instr.CHECK_SIGNALS -> check_signals
+    
+    | Instr.C_CALL1 -> c_call (const 0) (* argument is number of elements to pop from stack *)
+    | Instr.C_CALL2 -> c_call (const 1) 
+    | Instr.C_CALL3 -> c_call (const 2) 
+    | Instr.C_CALL4 -> c_call (const 3) 
+    | Instr.C_CALL5 -> c_call (const 4) 
+    | Instr.C_CALLN -> c_calln
+    
+    | Instr.CONST0 -> constn (const 0)
+    | Instr.CONST1 -> constn (const 1)
+    | Instr.CONST2 -> constn (const 2)
+    | Instr.CONST3 -> constn (const 3)
+    | Instr.CONSTINT -> constint
+    
+    | Instr.PUSHCONST0 -> pushconstn (const 0)
+    | Instr.PUSHCONST1 -> pushconstn (const 1) 
+    | Instr.PUSHCONST2 -> pushconstn (const 2) 
+    | Instr.PUSHCONST3 -> pushconstn (const 3) 
+    | Instr.PUSHCONSTINT -> pushconstint
+    
+    | Instr.NEGINT -> negint
+    | Instr.ADDINT -> addint
+    | Instr.SUBINT -> subint
+    | Instr.MULINT -> mulint
+    | Instr.DIVINT -> divint
+    | Instr.MODINT -> modint
+    | Instr.ANDINT -> andint
+    | Instr.ORINT -> orint
+    | Instr.XORINT -> xorint
+    | Instr.LSLINT -> lslint
+    | Instr.LSRINT -> lsrint
+    | Instr.ASRINT -> asrint
+    
+    | Instr.EQ -> eq
+    | Instr.NEQ -> neq
+    | Instr.LTINT -> ltint
+    | Instr.LEINT -> leint
+    | Instr.GTINT -> gtint
+    | Instr.GEINT -> geint
+    
+    | Instr.OFFSETINT -> offsetint
+    | Instr.OFFSETREF -> offsetref
+    | Instr.ISINT -> isint
+    | Instr.GETMETHOD -> getmethod
+    
+    | Instr.BEQ -> beq
+    | Instr.BNEQ -> bneq
+    | Instr.BLTINT -> bltint
+    | Instr.BLEINT -> bleint
+    | Instr.BGTINT -> bgtint
+    | Instr.BGEINT -> bgeint
+    
+    | Instr.ULTINT -> ultint
+    | Instr.UGEINT -> ugeint
+    | Instr.BULTINT -> bultint
+    | Instr.BUGEINT -> bugeint
+    
+    | Instr.GETPUBMET -> getpubmet
+    | Instr.GETDYNMET -> getdynmet
+    
+    | Instr.STOP -> stop
+    | Instr.EVENT -> event
+    | Instr.BREAK -> break
+    | Instr.RERAISE -> reraise
+    | Instr.RAISE_NOTRACE-> raise_notrace
+  
 end
 
-module type M_eval = Monad 
+(*module type M_eval = Monad 
     with type S.t = int64
      and type S.st = State_eval.st
 module M : M_eval = Monad(State_eval) 
-module O = Opcodes(M)
+module O = Opcodes(M)*)
 
 module type M_poly = Monad 
     with type S.t = State_poly.t
      and type S.st = State_poly.st
-module M' : M_poly = Monad(State_poly) 
+module M' : M_poly = Monad(struct let trace=false end)(State_poly) 
 module O' = Opcodes(M')
-
-open M
-open O
 
