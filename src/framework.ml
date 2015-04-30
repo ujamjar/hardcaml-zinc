@@ -13,6 +13,21 @@ module If = Cyclesim.Sim_obj_if.Make(B)
 
 type memory = (int64, Bigarray.int64_elt, Bigarray.c_layout) Bigarray.Array1.t 
 
+let c_heap_size_bytes = 32*1024 (* 32k c-heap *)
+
+type memory_mapping = 
+  {
+    memory : memory;
+    code_address : int;
+    code_size : int;
+    atoms_address : int;
+    globals_address : int;
+    c_heap_address : int;
+    c_heap_size : int;
+    heap_address : int;
+    stack_address : int;
+  }
+
 let init_memory bc memory_size_words = 
   let open Int64 in
   let open Load in
@@ -32,7 +47,7 @@ let init_memory bc memory_size_words =
   let globals = get_global_data64 bc globals_address in
   (* init data *)
   let c_heap_address = globals_address + (Array.length globals) in
-  let heap_address = c_heap_address + 1024 in (* XXX *)
+  let heap_address = c_heap_address + (c_heap_size_bytes/8) in 
   let memory = Bigarray.(Array1.create int64 c_layout memory_size_words) in
   let () = 
     for i=0 to memory_size_words-1 do
@@ -44,8 +59,19 @@ let init_memory bc memory_size_words =
     done
   in
   let stack_address = memory_size_words in
-  memory, code_address*8, atoms_address*8, globals_address*8, 
-  c_heap_address*8, heap_address*8, stack_address*8
+  (* init the c-heap *)
+  let () = C_runtime.init (c_heap_address*8) c_heap_size_bytes in
+  {
+    memory = memory; 
+    code_address = code_address*8; 
+    code_size = Array.length bc.code * 4;
+    atoms_address = atoms_address*8; 
+    globals_address = globals_address*8; 
+    c_heap_address = c_heap_address*8;
+    c_heap_size = c_heap_size_bytes;
+    heap_address = heap_address*8;
+    stack_address = stack_address*8;
+  }
 
 type cfg = 
   {
@@ -72,19 +98,19 @@ let get_string memory v =
           (field memory v (i/8)) 
           ((i mod 8)*8)))
 
-let trace_val ~bytecode_address ~bytecode_size ~memory v = 
+let trace_val m v = 
   let open M in
   let open Printf in
   let open Int64 in
   printf "0x%Lx" v;
-  let bytecode_address, bytecode_size = of_int bytecode_address, of_int bytecode_size in
+  let bytecode_address, bytecode_size = of_int m.code_address, of_int m.code_size in
   let codeofs v = div (sub v bytecode_address) 4L in
   let in_program v = 
     (rem v 4L = 0L) && v >= bytecode_address && v < (add bytecode_address bytecode_size)
   in
-  let header, field = header memory, field memory in
+  let header, field = header m.memory, field m.memory in
   if is_int v = 1L then printf "=long%Li" (shift_right v 1)
-  else if in_program v then printf "=code%Li" (codeofs v)
+  else if in_program v then printf "=code@%Li" (codeofs v)
   else if is_block v = 1L then begin
     let h = header v in
     let tag, size = tag h, to_int (size h) in
@@ -98,31 +124,32 @@ let trace_val ~bytecode_address ~bytecode_size ~memory v =
         printf ")"
       end
     in 
-    begin
-      if tag = closure_tag then 
-        printf "=closure[s%i,cod%Li]" size (codeofs (field v 0))
-      else if tag = string_tag then
-        let str = get_string memory v in
-        printf "=string[s%i,L%i]='%s'" size (String.length str) str
-      else if tag = double_tag then
-        printf "=float[s%i]=%s" size (string_of_float (Int64.float_of_bits (field v 0)))
-      else if tag = custom_tag then
-        printf "=custom[s%i]" size
-      else
-        printf "=block<T%Li/s%i>" tag size
-    end;
-    dump_fields()
+    if tag = closure_tag then begin
+      printf "=closure[s%i,cod%Li]" size (codeofs (field v 0));
+      dump_fields()
+    end else if tag = string_tag then begin
+      let str = get_string m.memory v in
+      printf "=string[s%iL%i]='%s'" size (String.length str) str;
+      dump_fields()
+    end else if tag = double_tag then begin
+      printf "=float[s%i]=%s" size (string_of_float (Int64.float_of_bits (field v 0)));
+      dump_fields()
+    end else if tag = custom_tag then begin
+      printf "=custom[s%i]" size;
+      dump_fields()
+    end else
+      printf "=block<T%Li/s%i>" tag size
   end else printf "=unknown"
 
-let trace ~bytecode_address ~bytecode_size ~stack_address ~memory ~env ~sp ~accu = 
-  let trace_val = trace_val ~bytecode_address ~bytecode_size ~memory in
+let trace ~m ~env ~sp ~accu = 
+  let trace_val = trace_val m in
   let sp = Int64.to_int sp in
-  let stack_size = (stack_address - sp) / 8 in
+  let stack_size = (m.stack_address - sp) / 8 in
   printf "env="; trace_val env; printf "\n";
   printf "accu="; trace_val accu; printf "\n";
   printf " sp=0x%x @%i:\n" sp stack_size;
-  for i=0 to min (stack_size-1) 19 do
-    printf "[%i] " (stack_size-i); trace_val memory.{ (sp/8)+i }; printf "\n"
+  for i=0 to min (stack_size-1) 15 do
+    printf "[%i] " (stack_size-i); trace_val m.memory.{ (sp/8)+i }; printf "\n"
   done
     
 let make cfg exe = 
@@ -171,35 +198,26 @@ let make cfg exe =
   let o = Zinc.O.map If.output o in
   let n = Zinc.O.map If.output n in
 
-  let memory, bytecode_address, atom_table_address, globals_address, 
-      c_heap_address, heap_address, stack_address = 
-    init_memory exe mem_size_words
-  in
-  let () = C_runtime.init c_heap_address in
+  let memory = init_memory exe mem_size_words in
 
-  let trace = 
-    let bytecode_size = (Array.length exe.Load.code * 4) in
-    (fun () ->
-      trace ~bytecode_address ~bytecode_size ~stack_address ~memory
-        ~env:o.env#i64 ~sp:o.sp#i64 ~accu:o.sp#i64)
-  in
+  let trace () = trace ~m:memory ~env:o.env#i64 ~sp:o.sp#i64 ~accu:o.sp#i64 in
 
   S.reset sim;
-  i.bytecode_start_address#i bytecode_address;
-  i.atom_table_address#i (atom_table_address + 8);
-  i.globals_start_address#i (globals_address + 8);
-  i.heap_start_address#i heap_address;
-  i.stack_start_address#i stack_address;
+  i.bytecode_start_address#i memory.code_address;
+  i.atom_table_address#i (memory.atoms_address + 8);
+  i.globals_start_address#i (memory.globals_address + 8);
+  i.heap_start_address#i memory.heap_address;
+  i.stack_start_address#i memory.stack_address;
   i.start#i 1;
 
   let log_mem_access cycle rw addr data sp =
     if cfg.mem_trace then begin
       let offs, typ = 
-        if addr < atom_table_address then (addr-0)*2, "BYTE"
-        else if addr < globals_address then addr-atom_table_address, "ATOM"
-        else if addr < heap_address then addr-globals_address, "GLBL"
-        else if addr >= (sp-8) then stack_address - addr - 1, "STCK"
-        else addr - heap_address, "HEAP"
+        if addr < memory.atoms_address then (addr-0)*2, "BYTE"
+        else if addr < memory.globals_address then addr-memory.atoms_address, "ATOM"
+        else if addr < memory.heap_address then addr-memory.globals_address, "GLBL"
+        else if addr >= (sp-8) then memory.stack_address - addr - 1, "STCK"
+        else addr - memory.heap_address, "HEAP"
       in
       printf "[%-8i] %s %s @[%.8x | %.8x] = %.16Lx [sp=%i]\n"
         cycle (if rw=0 then "R" else "W") typ addr offs data sp
@@ -234,13 +252,13 @@ let make cfg exe =
         let rw = n.memory_o.memory_read_write#i in
         let sp = o.sp#i in
         if rw=0 then begin (* read *)
-          let data = memory.{addr lsr 3} in
+          let data = memory.memory.{addr lsr 3} in
           log_mem_access !cycle rw addr data sp;
           i.memory_i.memory_data_in#i64 data;
         end else begin (* write *)
           let data = n.memory_o.memory_data_out#i64 in
           log_mem_access !cycle rw addr data sp;
-          memory.{addr lsr 3} <- data;
+          memory.memory.{addr lsr 3} <- data;
         end;
         i.memory_i.memory_ready#i 1;
       end;
@@ -257,7 +275,7 @@ let make cfg exe =
             env=o.env#i64;
             accu=o.accu#i64;
             sp=o.sp#i;
-            memory=memory;
+            memory=memory.memory;
           })
         in
         i.c_call_result#i64 value;

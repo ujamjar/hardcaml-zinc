@@ -21,6 +21,8 @@ type repr64 =
   | `b of int64 * repr64 array 
   | `i of int64 ]
 
+val int64_of_obj : Obj.t -> int64
+
 val get_repr64 : Obj.t -> repr64
 
 val get_data64 : repr64 -> int -> int64 array

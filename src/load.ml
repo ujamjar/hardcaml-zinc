@@ -53,6 +53,11 @@ type repr64 =
 
 module M = Mlvalues.Make(Ops.Int64)
 
+let int64_of_obj o = 
+  let bitlo = if Obj.is_int o then 1L else 0L in
+  let valhi = Int64.of_int (Obj.magic o : int) in
+  Int64.(logor (shift_left valhi 1) bitlo)
+
 let rec get_repr64 o =
   if Obj.is_block o then
     let tag,size = Obj.tag o, Obj.size o in
@@ -61,11 +66,7 @@ let rec get_repr64 o =
           Array.(init size (fun i -> get_repr64 (Obj.field o i))))
     else
       `f(M.make_header (Int64.of_int size) M.white (Int64.of_int tag), 
-        Array.(init size (fun i ->
-          let o = Obj.field o i in
-          let bitlo = if Obj.is_int o then 1L else 0L in
-          let valhi = Int64.of_int (Obj.magic o : int) in
-          Int64.(logor (shift_left valhi 1) bitlo))))
+        Array.(init size (fun i -> int64_of_obj (Obj.field o i))))
   else
     `i Int64.(logor (shift_left (of_int (Obj.magic o : int)) 1) 1L)
 

@@ -544,7 +544,7 @@ module Opcodes(M : Monad) = struct
 
   let check_stacks = return ()
 
-  let not_implemented = return ()
+  let not_implemented st = failwith "notimplemented"; return () st
 
   let raise_error _ = return ()
 
@@ -706,7 +706,7 @@ module Opcodes(M : Monad) = struct
     read_reg `extra_args >>= fun earg -> push_stack (val_int earg) >>
     read_reg `env >>= push_stack >>
     read_reg `pc >>= push_stack >>
-    push_stack_n args >>
+    push_stack_n (List.rev args) >>
     read_reg `accu >>= fun accu ->
     read_mem `mem accu >>= write_reg `pc >> 
     write_reg `env accu >>
@@ -734,7 +734,7 @@ module Opcodes(M : Monad) = struct
     pop_arg >>= fun slotsize ->
     read_reg `sp >>= fun sp ->
     let newsp = slotsize -: nargs in
-    for_dn nargs zero
+    for_dn (nargs -: one) zero
       (fun i -> read_stack i >>= write_stack (i +: newsp)) >>
     write_reg `sp (sp +: aofs newsp) >>
     read_reg `accu >>= fun accu -> read_mem `mem accu >>= write_reg `pc >>
@@ -1232,9 +1232,43 @@ module Opcodes(M : Monad) = struct
   (************************************************************)
   (* String operations *)
 
-  (* need some special operations to support this *)
-  let getstringchar = not_implemented
-  let setstringchar = not_implemented
+  (*
+    Instruct(GETSTRINGCHAR):
+      accu = Val_int(Byte_u(accu, Long_val(sp[0])));
+      sp += 1;
+      Next;
+  *)
+  let getstringchar = 
+    pop_stack >>= fun byte_ofs ->
+    read_reg `accu >>= fun ptr ->
+    let c7, c255 = const 7, const 255 in
+    let byte_ofs = int_val byte_ofs in
+    let ptr = ptr +: (byte_ofs &: (~: c7)) in
+    let ofs = byte_ofs &: c7 in
+    read_mem `mem ptr >>= fun str ->
+    let byte = (srl str (sll ofs c3)) &: c255 in
+    write_reg `accu (val_int byte)
+
+  (*
+    Instruct(SETSTRINGCHAR):
+      Byte_u(accu, Long_val(sp[0])) = Int_val(sp[1]);
+      sp += 2;
+      accu = Val_unit;
+      Next;
+  *)
+  let setstringchar = 
+    pop_stack >>= fun byte_ofs ->
+    pop_stack >>= fun byte_val ->
+    read_reg `accu >>= fun ptr ->
+    let c7, c255 = const 7, const 255 in
+    let byte_ofs = int_val byte_ofs in
+    let ptr = ptr +: (byte_ofs &: (~: c7)) in
+    let ofs = byte_ofs &: c7 in
+    read_mem `mem ptr >>= fun str ->
+    let byte = (sll (int_val byte_val) (sll ofs c3)) in
+    let mask = ~: (sll c255 (sll ofs c3)) in
+    write_mem `mem ptr ((str &: mask) |: byte) >>
+    write_reg `accu val_unit
 
   (************************************************************)
   (* Branches and conditional branches *)
@@ -1277,13 +1311,37 @@ module Opcodes(M : Monad) = struct
   (************************************************************)
   (* Exceptions *)
 
+  (*
+    Instruct(PUSHTRAP):
+      sp -= 4;
+      Trap_pc(sp) = pc + *pc;
+      Trap_link(sp) = caml_trapsp;
+      sp[2] = env;
+      sp[3] = Val_long(extra_args);
+      caml_trapsp = sp;
+      pc++;
+      Next;
+  *)
   let pushtrap = 
-    pop_arg >>= fun ofs -> read_reg `pc >>= fun pc -> push_stack (pc +: pcofs ofs) >>
-    read_reg `trapsp >>= push_stack >>
-    read_reg `env >>= push_stack >>
     read_reg `extra_args >>= fun earg -> push_stack (val_int earg) >>
+    read_reg `env >>= push_stack >>
+    read_reg `trapsp >>= push_stack >>
+    pop_arg >>= fun ofs -> read_reg `pc >>= fun pc -> push_stack (pc +: pcofs (ofs -: one)) >>
     copy_modify_reg `sp `trapsp (fun d -> d)
 
+  (*
+    Instruct(POPTRAP):
+      if (caml_something_to_do) {
+        /* We must check here so that if a signal is pending and its
+           handler triggers an exception, the exception is trapped
+           by the current try...with, not the enclosing one. */
+        pc--; /* restart the POPTRAP after processing the signal */
+        goto process_signal;
+      }
+      caml_trapsp = Trap_link(sp);
+      sp += 4;
+      Next;
+  *)
   let poptrap = 
     something_to_do 
       (read_stack one >>= write_reg `trapsp >> incr `sp (aofs (const 4))) 
@@ -1321,7 +1379,6 @@ module Opcodes(M : Monad) = struct
   let c_call n = 
     pop_arg >>= fun prim ->
     read_reg `env >>= push_stack >>
-    (* XXX DO CALL somehow ... *)
     c_call prim >>= write_reg `accu >>
     pop_stack >>= write_reg `env >>
     modify_reg `sp (fun sp -> sp +: (aofs n))

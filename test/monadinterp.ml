@@ -17,9 +17,7 @@ let () = Arg.parse
 
 let bytecode = Load.bytecode_exe !bytecode_filename
 
-let memory, code_adr, atoms_adr, globals_adr,
-            c_heap_adr, heap_adr, stack_adr = 
-    Framework.init_memory bytecode (!memsize_kb * (1024/8))
+let mm = Framework.init_memory bytecode (!memsize_kb * (1024/8))
 
 module S = Interp.State_eval
 module type M_eval = Interp.Monad 
@@ -31,14 +29,14 @@ module O = Interp.Opcodes(M)
 let state = 
   S.({
     initial() with
-      pc = Int64.of_int code_adr;
-      sp = Int64.of_int stack_adr;
-      env = Int64.of_int (atoms_adr + 8);
-      trapsp = Int64.of_int stack_adr;
-      global_data = Int64.of_int (globals_adr + 8);
-      atom_table = Int64.of_int (atoms_adr + 8);
-      alloc_base = Int64.of_int heap_adr;
-      memory = memory;
+      pc = Int64.of_int mm.Framework.code_address;
+      sp = Int64.of_int mm.Framework.stack_address;
+      env = Int64.of_int (mm.Framework.atoms_address + 8);
+      trapsp = Int64.of_int mm.Framework.stack_address;
+      global_data = Int64.of_int (mm.Framework.globals_address + 8);
+      atom_table = Int64.of_int (mm.Framework.atoms_address + 8);
+      alloc_base = Int64.of_int mm.Framework.heap_address;
+      memory = mm.Framework.memory;
       exe = bytecode;
   })
 
@@ -47,7 +45,7 @@ let step n st =
   let open Printf in
   (* fetch instruction *)
   let pc = Int64.to_int st.pc / 4 in
-  let instr = memory.{pc / 2} in
+  let instr = mm.Framework.memory.{pc / 2} in
   let instr = S.(srl (if pc mod 2 = 0 then sll instr 32L else instr) 32L) in
   let st = { st with pc = S.(st.pc +: 4L) } in
   let instr = Enum.to_enum<Instr.opcodes> (Int64.to_int instr) in
@@ -56,8 +54,7 @@ let step n st =
     (if !trace>1 then printf "\n##%i\n" (n+1));
     (if !trace>0 then printf "%6i  %s\n" pc (Show.show<Instr.opcodes> instr));
     (if !trace>1 then
-      Framework.trace ~bytecode_address:code_adr ~bytecode_size ~stack_address:stack_adr
-        ~memory ~env:st.env ~sp:st.sp ~accu:st.accu)
+      Framework.trace ~m:mm ~env:st.env ~sp:st.sp ~accu:st.accu)
   in
   (* execute instruction *)
   if instr = Instr.STOP then failwith "STOP!"
