@@ -1,22 +1,16 @@
 (*
  * TODO;
  *
- *  - rethink the iter_up/dn functions.  when we see how the statemchine will work try
- *    to unify them.
- *  - none of the for_up/dn loop ranges are exactly correct yet
- *
  *  - not_implemented; 
- *      getstringchar, setstringchar
- *      switch
- *      pushtrap, poptrap, raise_notrace, reraise, raise_
- *      check_signals
- *      c_calln, (c_call not fully implemented)
  *      getmethod, getpubmet, getdynmet
  *      stop, event, break
  *
- *  - 'not_implemented' should do something like chuck an exception if run
+ *  - not fully implemented
+ *      pushtrap, poptrap, raise_notrace, reraise, raise_
+ *      check_signals
+ *      c_call
  *
- *  - need to do something on stop
+ *  - need to indicate 'stop' to caller
  *)
 
 type machine_register = 
@@ -544,11 +538,11 @@ module Opcodes(M : Monad) = struct
 
   let check_stacks = return ()
 
-  let not_implemented st = failwith "notimplemented"; return () st
+  let not_implemented st = failwith "not implemented"
 
   let raise_error _ = return ()
 
-  let something_to_do e = e
+  let something_to_do = zero
 
   (******************************************************************)
   (* XXX DEBUG XXX *)
@@ -1298,7 +1292,35 @@ module Opcodes(M : Monad) = struct
     read_reg `accu >>= fun accu ->
     if_ (accu ==: val_false) branch incr_pc
 
-  let switch = not_implemented
+  (*
+    Instruct(SWITCH): {
+      uint32 sizes = *pc++;
+      if (Is_block(accu)) {
+        intnat index = Tag_val(accu);
+        Assert ((uintnat) index < (sizes >> 16));
+        pc += pc[(sizes & 0xFFFF) + index];
+      } else {
+        intnat index = Long_val(accu);
+        Assert ((uintnat) index < (sizes & 0xFFFF)) ;
+        pc += pc[index];
+      }
+      Next;
+    }
+  *)
+  let switch = 
+    read_reg `accu >>= fun accu ->
+    if_ (is_block accu) begin
+      pop_arg >>= fun sizes ->
+      header accu >>= fun hdr ->
+      let index = tag hdr in
+      read_bytecode ((sizes &: const 0xFFFF) +: index) >>= fun ofs ->
+      modify_reg `pc (fun pc -> pc +: pcofs ofs)
+    end begin
+      let index = int_val accu in
+      incr_pc >>
+      read_bytecode index >>= fun ofs ->
+      modify_reg `pc (fun pc -> pc +: pcofs ofs)
+    end
 
   (*
     Instruct(BOOLNOT):
@@ -1343,7 +1365,8 @@ module Opcodes(M : Monad) = struct
       Next;
   *)
   let poptrap = 
-    something_to_do 
+    if_ something_to_do
+      (return ()) (* XXX *)
       (read_stack one >>= write_reg `trapsp >> incr `sp (aofs (const 4))) 
 
   let raise_notrace = not_implemented
@@ -1360,7 +1383,9 @@ module Opcodes(M : Monad) = struct
   (************************************************************)
   (* Signal handling *)
 
-  let check_signals = not_implemented
+  let check_signals = 
+    if_ something_to_do (* XXX *)
+      (return ()) (return ()) 
 
   (* XXX process signal *)
 

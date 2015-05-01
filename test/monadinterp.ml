@@ -40,19 +40,33 @@ let state =
       exe = bytecode;
   })
 
+let is_c_call i =
+  let open Instr in
+  match i with
+  | C_CALL1 | C_CALL2 | C_CALL3 | C_CALL4 | C_CALL5 | C_CALLN -> true
+  | _ -> false
+
 let step n st = 
   let open S in
   let open Printf in
   (* fetch instruction *)
   let pc = Int64.to_int st.pc / 4 in
-  let instr = mm.Framework.memory.{pc / 2} in
-  let instr = S.(srl (if pc mod 2 = 0 then sll instr 32L else instr) 32L) in
+  let get_instr pc = 
+    let instr = mm.Framework.memory.{pc / 2} in
+    S.(srl (if pc mod 2 = 0 then sll instr 32L else instr) 32L) 
+  in
+  let instr = get_instr pc in
   let st = { st with pc = S.(st.pc +: 4L) } in
   let instr = Enum.to_enum<Instr.opcodes> (Int64.to_int instr) in
   let () = 
-    let bytecode_size = (Array.length bytecode.Load.code * 4) in
     (if !trace>1 then printf "\n##%i\n" (n+1));
-    (if !trace>0 then printf "%6i  %s\n" pc (Show.show<Instr.opcodes> instr));
+    (if !trace>0 then begin
+      if is_c_call instr then
+        let prim = Int64.to_int @@ get_instr (Int64.to_int st.pc / 4) in
+        printf "%6i  %s %s\n" pc (Show.show<Instr.opcodes> instr) state.exe.Load.prim.(prim)
+      else
+        printf "%6i  %s\n" pc (Show.show<Instr.opcodes> instr)
+    end);
     (if !trace>1 then
       Framework.trace ~m:mm ~env:st.env ~sp:st.sp ~accu:st.accu)
   in
