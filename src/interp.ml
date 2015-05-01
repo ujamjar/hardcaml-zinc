@@ -87,7 +87,7 @@ module State_eval = struct
       atom_table : int64;
       alloc_base : int64;
       (* memory *)
-      memory : (int64, Bigarray.int64_elt, Bigarray.c_layout) Bigarray.Array1.t;
+      memory : Repr.memory;
       (* executable *)
       exe : Load.bytecode_exe;
     }
@@ -1616,7 +1616,7 @@ module Opcodes(M : Monad) = struct
   (************************************************************)
   (* Debugging and machine control *)
 
-  let stop = not_implemented
+  let stop = return ()
 
   let event = not_implemented
 

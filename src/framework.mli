@@ -1,8 +1,6 @@
-type memory = (int64, Bigarray.int64_elt, Bigarray.c_layout) Bigarray.Array1.t 
-
 type memory_mapping = 
   {
-    memory : memory;
+    memory : Repr.memory;
     code_address : int;
     code_size : int;
     atoms_address : int;

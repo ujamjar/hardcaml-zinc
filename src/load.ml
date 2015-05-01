@@ -46,81 +46,8 @@ let byte_codes str =
       in
       Array.fold_left Int32.logor 0l a)
 
-type repr64 = 
-  [ `f of int64 * int64 array 
-  | `b of int64 * repr64 array 
-  | `i of int64 ]
-
-module M = Mlvalues.Make(Ops.Int64)
-
-let int64_of_obj o = 
-  let bitlo = if Obj.is_int o then 1L else 0L in
-  let valhi = Int64.of_int (Obj.magic o : int) in
-  Int64.(logor (shift_left valhi 1) bitlo)
-
-let rec get_repr64 o =
-  if Obj.is_block o then
-    let tag,size = Obj.tag o, Obj.size o in
-    if tag < Obj.no_scan_tag then
-      `b(M.make_header (Int64.of_int size) M.white (Int64.of_int tag), 
-          Array.(init size (fun i -> get_repr64 (Obj.field o i))))
-    else
-      `f(M.make_header (Int64.of_int size) M.white (Int64.of_int tag), 
-        Array.(init size (fun i -> int64_of_obj (Obj.field o i))))
-  else
-    `i Int64.(logor (shift_left (of_int (Obj.magic o : int)) 1) 1L)
-
-let get_data64 data base_word_offset = 
-  let is_int = function `i v -> Some(v) | _ -> None in
-  let rec size = function
-    | `i _ -> 1
-    | `f(_, a) -> 1 + Array.length a
-    | `b(_, a) -> 
-      1 + (Array.fold_left 
-            (fun acc x -> 
-              acc + (match is_int x with None -> (1 + size x) | _ -> 1)) 0 a)
-  in
-  let size = size data in
-  let arr = Array.init size (fun _ -> 0L) in
-  let pos = ref 0 in
-  let push = 
-    (fun d -> 
-      let p = !pos in
-      arr.(p) <- d;
-      incr pos;
-      p)
-  in
-  let rec layout = function
-    | `i(int_val) -> push int_val
-    | `f(hdr,data) -> begin
-      let size = Array.length data in
-      let base = push hdr in
-      for i=0 to size - 1 do
-        ignore @@ push data.(i)
-      done;
-      base
-    end
-    | `b(hdr,data) -> begin
-      let size = Array.length data in
-      let base = push hdr in
-      let resv = Array.init size (fun _ -> push 0L) in (* reserve locations *)
-      for i=0 to size-1 do
-        match is_int data.(i) with
-        | Some(v) -> arr.( resv.(i) ) <- v
-        | None -> 
-          let ptr = layout data.(i) in
-          (* convert to pointer, offset by base *)
-          arr.( resv.(i) ) <- Int64.of_int ((base_word_offset + ptr + 1) lsl 3) 
-      done;
-      base
-    end
-  in
-  let _ = layout data in
-  assert (size = !pos);
-  arr
-
 let get_global_data64 exe offset = 
-  get_data64 (get_repr64 (Obj.repr (Marshal.from_string exe.data 0))) offset
+  Repr.data64_of_repr64 (Repr.repr64_of_obj (Obj.repr (Marshal.from_string exe.data 0))) offset
 
 let bytecode_exe exe_name = 
   Symtable.reset ();

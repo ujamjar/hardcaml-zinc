@@ -11,13 +11,11 @@ module Z = Interface.Gen(B)(Zinc.I)(Zinc.O)
 (*module Z = HardCamlLlvmsim.Sim.Gen(B)(Zinc.I)(Zinc.O)*)
 module If = Cyclesim.Sim_obj_if.Make(B)
 
-type memory = (int64, Bigarray.int64_elt, Bigarray.c_layout) Bigarray.Array1.t 
-
 let c_heap_size_bytes = 32*1024 (* 32k c-heap *)
 
 type memory_mapping = 
   {
-    memory : memory;
+    memory : Repr.memory;
     code_address : int;
     code_size : int;
     atoms_address : int;

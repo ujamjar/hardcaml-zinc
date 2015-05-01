@@ -71,13 +71,16 @@ let step n st =
       Framework.trace ~m:mm ~env:st.env ~sp:st.sp ~accu:st.accu)
   in
   (* execute instruction *)
-  if instr = Instr.STOP then failwith "STOP!"
-  else
-    M.step st O.(dispatch instr)
+  let st = M.step st O.(dispatch instr) in
+  if instr = Instr.STOP then None
+  else Some(st)
 
 let rec run n st = 
   if n = !num_instrs then ()
-  else run (n+1) (step n st)
+  else 
+    match step n st with
+    | Some(st) -> run (n+1) st
+    | None -> ()
 
 let () = run 0 state
 

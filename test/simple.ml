@@ -3,9 +3,7 @@ let b = 2
 let c = a + b
 *)
 
-(*
 let () = output_string stdout "hello world!"
-*)
 
 (*
 type t = A | B | C
@@ -22,8 +20,8 @@ let d =
 (*
 let f = open_in "tmp"
 *)
-
+(*
 let s = Bytes.init 14 (fun i -> 'a') 
 let () = Bytes.set s 3 'b'
 let () = Bytes.set s 12 'c'
-
+*)

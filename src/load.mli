@@ -16,17 +16,6 @@ type bytecode_exe =
 
 val empty : bytecode_exe
 
-type repr64 = 
-  [ `f of int64 * int64 array 
-  | `b of int64 * repr64 array 
-  | `i of int64 ]
-
-val int64_of_obj : Obj.t -> int64
-
-val get_repr64 : Obj.t -> repr64
-
-val get_data64 : repr64 -> int -> int64 array
-
 val get_global_data64 : bytecode_exe -> int -> int64 array
 
 val bytecode_exe : string -> bytecode_exe

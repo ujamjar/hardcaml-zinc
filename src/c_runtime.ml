@@ -5,7 +5,7 @@ type state =
     env : int64;
     accu : int64;
     sp : int;
-    memory : (int64, Bigarray.int64_elt, Bigarray.c_layout) Bigarray.Array1.t;
+    memory : Repr.memory;
   }
 
 type c_call = 
@@ -40,7 +40,10 @@ let alloc_block st size colour tag =
   Int64.of_int ((p+1)*8)
 
 let get_repr : 'a -> int -> int64 array = fun a ofs ->
-  Load.get_data64 (Load.get_repr64 (Obj.repr a)) ofs 
+  Repr.data64_of_repr64 (Repr.repr64_of_obj (Obj.repr a)) ofs 
+
+let get_obj : state -> int64 -> 'a = fun st p ->
+  Obj.magic (Repr.obj_of_repr64 (Repr.repr64_of_data64 st.memory p))
 
 let alloc_block_from : state -> 'a -> int64 = fun st a -> 
   let p = !c_heap_address in
@@ -107,7 +110,7 @@ let string_length =
     val_int @@ of_int @@ ((size * 8) - pad - 1)
   )
 
-let get_string st v = 
+(*let get_string st v = 
   let size = to_int @@ size (header st v) in
   let pad = to_int @@ shift_right_logical (field st v (size-1)) 56 in
   String.init ((size*8)-pad-1) 
@@ -116,7 +119,8 @@ let get_string st v =
         logand 0xFFL @@
         shift_right_logical 
           (field st v (i/8)) 
-          ((i mod 8)*8)))
+          ((i mod 8)*8)))*)
+let get_string st v = (get_obj st v : string)
 
 let output_string = 
   C4 (fun st chan bytes ofs len ->
@@ -236,7 +240,7 @@ module Int_c_calls(I : Int) = struct
       let p = alloc_block st 2L custom_tag white in
       let c = f (I.to_t a) (I.to_t b) in
       set_field st p 0 0L; (* XXX should point to custom allocation block... *)
-      set_field st p 1 (Load.int64_of_obj Obj.(field (repr c) 1));
+      set_field st p 1 (Repr.int64_of_obj Obj.(field (repr c) 1));
       p)
 
   let op1 f =
@@ -244,7 +248,7 @@ module Int_c_calls(I : Int) = struct
       let p = alloc_block st 2L custom_tag white in
       let c = f (I.to_t a) in
       set_field st p 0 0L; (* XXX should point to custom allocation block... *)
-      set_field st p 1 (Load.int64_of_obj Obj.(field (repr c) 1));
+      set_field st p 1 (Repr.int64_of_obj Obj.(field (repr c) 1));
       p)
 
   let sftop f =
@@ -252,7 +256,7 @@ module Int_c_calls(I : Int) = struct
       let p = alloc_block st 2L custom_tag white in
       let c = f (I.to_t a) (to_int (int_val b)) in
       set_field st p 0 0L; (* XXX should point to custom allocation block... *)
-      set_field st p 1 (Load.int64_of_obj Obj.(field (repr c) 1));
+      set_field st p 1 (Repr.int64_of_obj Obj.(field (repr c) 1));
       p)
 
   let c_calls = [
