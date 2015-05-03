@@ -1,5 +1,5 @@
 # OASIS_START
-# DO NOT EDIT (digest: f76aec0b0835f0570aa5ba5464cc0de7)
+# DO NOT EDIT (digest: 248d06d499e65d703043d9a8de8dbdd3)
 # Ignore VCS directories, you can use the same kind of rule outside
 # OASIS_START/STOP if you want to exclude directories that contains
 # useless stuff for the build process
@@ -19,6 +19,7 @@ true: annot, bin_annot
 "src/arbiter.cmx": for-pack(HardCamlZinc)
 "src/ops.cmx": for-pack(HardCamlZinc)
 "src/mlvalues.cmx": for-pack(HardCamlZinc)
+"src/machine.cmx": for-pack(HardCamlZinc)
 "src/repr.cmx": for-pack(HardCamlZinc)
 "src/instr.cmx": for-pack(HardCamlZinc)
 "src/interp.cmx": for-pack(HardCamlZinc)
@@ -35,6 +36,7 @@ true: annot, bin_annot
 <src/*.ml{,i,y}>: pkg_hardcaml-llvmsim
 <src/*.ml{,i,y}>: pkg_hardcaml-waveterm.lterm
 <src/*.ml{,i,y}>: pkg_hardcaml.syntax
+<src/*.ml{,i,y}>: pkg_unix
 # Executable simple
 # Executable hardcamlrun
 <test/hardcamlrun.{native,byte}>: pkg_bigarray
@@ -46,6 +48,7 @@ true: annot, bin_annot
 <test/hardcamlrun.{native,byte}>: pkg_hardcaml-llvmsim
 <test/hardcamlrun.{native,byte}>: pkg_hardcaml-waveterm.lterm
 <test/hardcamlrun.{native,byte}>: pkg_hardcaml.syntax
+<test/hardcamlrun.{native,byte}>: pkg_unix
 <test/hardcamlrun.{native,byte}>: use_HardCamlZinc
 # Executable codes
 <test/codes.{native,byte}>: pkg_bigarray
@@ -57,6 +60,7 @@ true: annot, bin_annot
 <test/codes.{native,byte}>: pkg_hardcaml-llvmsim
 <test/codes.{native,byte}>: pkg_hardcaml-waveterm.lterm
 <test/codes.{native,byte}>: pkg_hardcaml.syntax
+<test/codes.{native,byte}>: pkg_unix
 <test/codes.{native,byte}>: use_HardCamlZinc
 # Executable monadinterp
 <test/monadinterp.{native,byte}>: pkg_bigarray
@@ -68,6 +72,7 @@ true: annot, bin_annot
 <test/monadinterp.{native,byte}>: pkg_hardcaml-llvmsim
 <test/monadinterp.{native,byte}>: pkg_hardcaml-waveterm.lterm
 <test/monadinterp.{native,byte}>: pkg_hardcaml.syntax
+<test/monadinterp.{native,byte}>: pkg_unix
 <test/monadinterp.{native,byte}>: use_HardCamlZinc
 <test/*.ml{,i,y}>: pkg_bigarray
 <test/*.ml{,i,y}>: pkg_compiler-libs.bytecomp
@@ -78,5 +83,6 @@ true: annot, bin_annot
 <test/*.ml{,i,y}>: pkg_hardcaml-llvmsim
 <test/*.ml{,i,y}>: pkg_hardcaml-waveterm.lterm
 <test/*.ml{,i,y}>: pkg_hardcaml.syntax
+<test/*.ml{,i,y}>: pkg_unix
 <test/*.ml{,i,y}>: use_HardCamlZinc
 # OASIS_STOP

@@ -23,7 +23,9 @@ type cfg =
 
 val trace_val : memory_mapping -> int64 -> unit
 
-val trace : m:memory_mapping -> env:int64 -> sp:int64 -> accu:int64 -> unit
+val trace : 
+  m:memory_mapping -> env:int64 -> sp:int64 -> accu:int64 -> 
+  trapsp:int64 -> eargs:int64 -> unit
 
 val make : cfg -> Load.bytecode_exe -> unit
 

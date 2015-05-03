@@ -13,28 +13,7 @@
  *  - need to indicate 'stop' to caller
  *)
 
-type machine_register = 
-  (* zinc registers *)
-  [ `accu | `env | `pc | `sp | `extra_args | `trapsp
-  (* other state *)
-  | `global_data | `atom_table | `alloc_base ]
-type cache = [ `stack | `program | `mem ]
-
-let string_of_mach_reg = function
-  | `accu -> "accu"
-  | `env -> "env"
-  | `pc -> "pc"
-  | `sp -> "sp"
-  | `extra_args -> "extra_args"
-  | `trapsp -> "trapsp"
-  | `global_data -> "global_data"
-  | `atom_table -> "atom_table"
-  | `alloc_base -> "alloc_base"
-
-let string_of_cache = function
-  | `stack -> "stack"
-  | `program -> "program"
-  | `mem -> "mem"
+open Machine
 
 module type State = sig
 
@@ -57,7 +36,10 @@ module type State = sig
 
   (* c-calls *)
 
-  val c_call : t -> st -> t * st
+  type c_call_result
+  val c_call : t -> st -> c_call_result * st
+  val c_call_exn : c_call_result -> t
+  val c_call_val : c_call_result -> t
 
   (* control *)
   
@@ -72,25 +54,8 @@ module type State = sig
 end
 
 module State_eval = struct
-
-  type st = 
-    {
-      (* zinc registers *)
-      accu : int64;
-      env : int64;
-      pc : int64;
-      sp : int64;
-      extra_args : int64;
-      trapsp : int64;
-      (* other state *)
-      global_data : int64;
-      atom_table : int64;
-      alloc_base : int64;
-      (* memory *)
-      memory : Repr.memory;
-      (* executable *)
-      exe : Load.bytecode_exe;
-    }
+  
+  type st = Machine.state 
 
   let initial () = 
     {
@@ -103,6 +68,7 @@ module State_eval = struct
       global_data = 0L;
       atom_table = 0L;
       alloc_base = 0L;
+      stack_high = 0L;
       memory = Bigarray.(Array1.create int64 c_layout 0);
       exe = Load.empty;
     }
@@ -118,6 +84,7 @@ module State_eval = struct
     | `global_data -> st.global_data, st
     | `atom_table -> st.atom_table, st
     | `alloc_base -> st.alloc_base, st
+    | `stack_high -> st.stack_high, st
 
   let set_reg st r v = 
     match r with
@@ -130,6 +97,7 @@ module State_eval = struct
     | `global_data -> failwith "cannot write to global data pointer"
     | `atom_table -> failwith "cannot write to atom table pointer"
     | `alloc_base -> { st with alloc_base = v }
+    | `stack_high -> failwith "cannot write to stack_high pointer"
 
   let get_mem st cache adr = 
     try
@@ -143,17 +111,12 @@ module State_eval = struct
     with Invalid_argument x ->
       raise (Invalid_argument ("set_mem {" ^ Int64.to_string adr ^ "} " ^ x))
 
+  type c_call_result = C_runtime.result
   let c_call prim st = 
-    (C_runtime.(run 
-      st.exe
-      (Int64.to_int prim)
-      {
-        env=st.env;
-        accu=st.accu;
-        sp=Int64.to_int st.sp;
-        memory=st.memory;
-      }), st)
-
+    (C_runtime.(run st.exe (Int64.to_int prim) st), st)
+  let c_call_exn = function `ok _ -> 0L | `exn _ -> 1L
+  let c_call_val = function `ok v | `exn v -> v
+  
   let cond st c t f = 
     snd @@ if c <> 0L then t st else f st
 
@@ -220,7 +183,10 @@ module State_poly = struct
 
   let set_mem st c adr v = { st with cmd = Set_mem(c, adr, v) :: st.cmd }
 
+  type c_call_result = t
   let c_call prim st = (C_call_result, { st with cmd = C_call(prim) :: st.cmd })
+  let c_call_exn t = t
+  let c_call_val t = t (* XXX ??? *)
 
   let cond st c t f = 
     let (),st_t = t {id = st.id; cmd = []} in
@@ -315,7 +281,7 @@ module type Monad = sig
   val for_dn : S.t -> S.t -> (S.t -> unit t) -> unit t
 
   val run : 'a t -> 'a * S.st
-  val step : S.st -> 'a t -> S.st
+  val step : S.st -> 'a t -> 'a * S.st
 
   val trace : bool
   val debug : string -> unit t
@@ -327,7 +293,7 @@ module type Monad = sig
   val read_mem : cache -> S.t -> S.t t
   val write_mem : cache -> S.t -> S.t -> unit t
 
-  val c_call : S.t -> S.t t
+  val c_call : S.t -> S.c_call_result t
 
   val read_bytecode : S.t -> S.t t
 
@@ -347,7 +313,7 @@ module Monad(T : sig val trace : bool end)(S : State) = struct
 
   let run m = m (S.initial ())
 
-  let step st m = snd (m st)
+  let step st m = m st
 
   let (>>=) = bind
   let (>>) m f = bind m (fun _ -> f)
@@ -462,6 +428,11 @@ module Opcodes(M : Monad) = struct
   open M
   open S
 
+  type returns = 
+    [ `step
+    | `stop
+    | `c_call of int64 * int64 ] (* nargs, prim *)
+
   (******************************************************************)
   (* utils *)
 
@@ -542,7 +513,11 @@ module Opcodes(M : Monad) = struct
 
   let raise_error _ = return ()
 
+  let raise_top_exn exn st = raise exn
+
   let something_to_do = zero
+
+  let step = return `step
 
   (******************************************************************)
   (* XXX DEBUG XXX *)
@@ -1373,7 +1348,42 @@ module Opcodes(M : Monad) = struct
 
   let reraise = not_implemented
 
-  let raise_ = not_implemented
+  (*
+    Instruct(RAISE):
+    raise_exception:
+      if (caml_trapsp >= caml_trap_barrier) caml_debugger(TRAP_BARRIER);
+      if (caml_backtrace_active) caml_stash_backtrace(accu, pc, sp, 0);
+    raise_notrace:
+      if ((char * ) caml_trapsp
+          >= (char * ) caml_stack_high - initial_sp_offset) {
+        caml_external_raise = initial_external_raise;
+        caml_extern_sp = (value * ) ((char * ) caml_stack_high
+                                    - initial_sp_offset);
+        caml_callback_depth--;
+        return Make_exception_result(accu);
+      }
+      sp = caml_trapsp;
+      pc = Trap_pc(sp);
+      caml_trapsp = Trap_link(sp);
+      env = sp[2];
+      extra_args = Long_val(sp[3]);
+      sp += 4;
+      Next;
+  *)
+  exception Uncaught_exception
+  let raise_ = 
+    (*if_ (trapsp >= (stack_high - initial_offset) ???? *)
+    read_reg `stack_high >>= fun stack_high ->
+    read_reg `trapsp >>= fun trapsp ->
+    if_ (trapsp >=: stack_high) 
+      (raise_top_exn Uncaught_exception)
+      begin 
+        read_reg `trapsp >>= write_reg `sp >>
+        pop_stack >>= write_reg `pc >>
+        pop_stack >>= write_reg `trapsp >>
+        pop_stack >>= write_reg `env >>
+        pop_stack >>= fun eargs -> write_reg `extra_args (val_int eargs) 
+      end
 
   (************************************************************)
   (* Stack checks *)
@@ -1393,6 +1403,15 @@ module Opcodes(M : Monad) = struct
   (* Calling C functions *)
 
   (*
+    C_CALLs are difficult as they change the way the interpreter
+    works (it uses longjumps to move around).
+
+    Lets move the problem up to the caller rather than try to 
+    encode it here.  It makes some sense as exactly what the 
+    hardware does will very much depend on the architecture.
+  *)
+
+  (*
     Instruct(C_CALL5):
       Setup_for_c_call;
       accu = Primitive( *pc)(accu, sp[1], sp[2], sp[3], sp[4]);
@@ -1401,14 +1420,24 @@ module Opcodes(M : Monad) = struct
       pc++;
       Next;
   *)
+(*
   let c_call n = 
     pop_arg >>= fun prim ->
     read_reg `env >>= push_stack >>
-    c_call prim >>= write_reg `accu >>
-    pop_stack >>= write_reg `env >>
-    modify_reg `sp (fun sp -> sp +: (aofs n))
+    c_call prim >>= fun result -> 
+    if_ (c_call_exn result) begin
+      write_reg `accu (c_call_val result) 
+    end begin
+      write_reg `accu (c_call_val result) >>
+      pop_stack >>= write_reg `env >>
+      modify_reg `sp (fun sp -> sp +: (aofs n))
+    end
 
   let c_calln = not_implemented
+*)
+  
+  let c_call n = pop_arg >>= fun prim -> return (`c_call(n, prim))
+  let c_calln = pop_arg >>= fun prim -> return (`c_call(0L,prim))
 
   (************************************************************)
   (* Integer constants *)
@@ -1625,186 +1654,187 @@ module Opcodes(M : Monad) = struct
   (************************************************************)
 
   let dispatch = function
-    | Instr.ACC0 -> accn (const 0)
-    | Instr.ACC1 -> accn (const 1)
-    | Instr.ACC2 -> accn (const 2)
-    | Instr.ACC3 -> accn (const 3)
-    | Instr.ACC4 -> accn (const 4)
-    | Instr.ACC5 -> accn (const 5)
-    | Instr.ACC6 -> accn (const 6)
-    | Instr.ACC7 -> accn (const 7)
-    | Instr.ACC -> acc
+    | Instr.ACC0 -> accn (const 0) >> step
+    | Instr.ACC1 -> accn (const 1) >> step
+    | Instr.ACC2 -> accn (const 2) >> step
+    | Instr.ACC3 -> accn (const 3) >> step
+    | Instr.ACC4 -> accn (const 4) >> step
+    | Instr.ACC5 -> accn (const 5) >> step
+    | Instr.ACC6 -> accn (const 6) >> step
+    | Instr.ACC7 -> accn (const 7) >> step
+    | Instr.ACC -> acc >> step
   
-    | Instr.PUSH -> push
-    | Instr.PUSHACC0 -> pushaccn (const 0)
-    | Instr.PUSHACC1 -> pushaccn (const 1) 
-    | Instr.PUSHACC2 -> pushaccn (const 2) 
-    | Instr.PUSHACC3 -> pushaccn (const 3) 
-    | Instr.PUSHACC4 -> pushaccn (const 4) 
-    | Instr.PUSHACC5 -> pushaccn (const 5) 
-    | Instr.PUSHACC6 -> pushaccn (const 6) 
-    | Instr.PUSHACC7 -> pushaccn (const 7) 
-    | Instr.PUSHACC -> pushacc
+    | Instr.PUSH -> push >> step
+    | Instr.PUSHACC0 -> pushaccn (const 0) >> step
+    | Instr.PUSHACC1 -> pushaccn (const 1) >> step
+    | Instr.PUSHACC2 -> pushaccn (const 2) >> step
+    | Instr.PUSHACC3 -> pushaccn (const 3) >> step
+    | Instr.PUSHACC4 -> pushaccn (const 4) >> step
+    | Instr.PUSHACC5 -> pushaccn (const 5) >> step
+    | Instr.PUSHACC6 -> pushaccn (const 6) >> step
+    | Instr.PUSHACC7 -> pushaccn (const 7) >> step
+    | Instr.PUSHACC -> pushacc >> step
   
-    | Instr.POP -> pop
-    | Instr.ASSIGN -> assign
+    | Instr.POP -> pop >> step
+    | Instr.ASSIGN -> assign >> step
 
-    | Instr.ENVACC1 -> envaccn (const 1)
-    | Instr.ENVACC2 -> envaccn (const 2)
-    | Instr.ENVACC3 -> envaccn (const 3)
-    | Instr.ENVACC4 -> envaccn (const 4)
-    | Instr.ENVACC -> envacc
+    | Instr.ENVACC1 -> envaccn (const 1) >> step
+    | Instr.ENVACC2 -> envaccn (const 2) >> step
+    | Instr.ENVACC3 -> envaccn (const 3) >> step
+    | Instr.ENVACC4 -> envaccn (const 4) >> step
+    | Instr.ENVACC -> envacc >> step
     
-    | Instr.PUSHENVACC1 -> pushenvaccn (const 1)
-    | Instr.PUSHENVACC2 -> pushenvaccn (const 2)
-    | Instr.PUSHENVACC3 -> pushenvaccn (const 3)
-    | Instr.PUSHENVACC4 -> pushenvaccn (const 4)
-    | Instr.PUSHENVACC -> pushenvacc
+    | Instr.PUSHENVACC1 -> pushenvaccn (const 1) >> step
+    | Instr.PUSHENVACC2 -> pushenvaccn (const 2) >> step
+    | Instr.PUSHENVACC3 -> pushenvaccn (const 3) >> step
+    | Instr.PUSHENVACC4 -> pushenvaccn (const 4) >> step
+    | Instr.PUSHENVACC -> pushenvacc >> step
     
-    | Instr.PUSH_RETADDR -> push_retaddr
+    | Instr.PUSH_RETADDR -> push_retaddr >> step
     
-    | Instr.APPLY -> apply
-    | Instr.APPLY1 -> applyn 1
-    | Instr.APPLY2 -> applyn 2 
-    | Instr.APPLY3 -> applyn 3 
+    | Instr.APPLY -> apply >> step
+    | Instr.APPLY1 -> applyn 1 >> step
+    | Instr.APPLY2 -> applyn 2  >> step
+    | Instr.APPLY3 -> applyn 3  >> step
     
-    | Instr.APPTERM -> appterm
-    | Instr.APPTERM1 -> apptermn 1
-    | Instr.APPTERM2 -> apptermn 2
-    | Instr.APPTERM3 -> apptermn 3
+    | Instr.APPTERM -> appterm >> step
+    | Instr.APPTERM1 -> apptermn 1 >> step
+    | Instr.APPTERM2 -> apptermn 2 >> step
+    | Instr.APPTERM3 -> apptermn 3 >> step
     
-    | Instr.RETURN -> return_
-    | Instr.RESTART -> restart
-    | Instr.GRAB -> grab
-    | Instr.CLOSURE -> closure
-    | Instr.CLOSUREREC -> closurerec
+    | Instr.RETURN -> return_ >> step
+    | Instr.RESTART -> restart >> step
+    | Instr.GRAB -> grab >> step
+    | Instr.CLOSURE -> closure >> step
+    | Instr.CLOSUREREC -> closurerec >> step
     
-    | Instr.OFFSETCLOSUREM2 -> offsetclosurem2
-    | Instr.OFFSETCLOSURE0 -> offsetclosure0
-    | Instr.OFFSETCLOSURE2 -> offsetclosure2
-    | Instr.OFFSETCLOSURE -> offsetclosure
+    | Instr.OFFSETCLOSUREM2 -> offsetclosurem2 >> step
+    | Instr.OFFSETCLOSURE0 -> offsetclosure0 >> step
+    | Instr.OFFSETCLOSURE2 -> offsetclosure2 >> step
+    | Instr.OFFSETCLOSURE -> offsetclosure >> step
 
-    | Instr.PUSHOFFSETCLOSUREM2 -> pushoffsetclosurem2 
-    | Instr.PUSHOFFSETCLOSURE0 -> pushoffsetclosure0
-    | Instr.PUSHOFFSETCLOSURE2 -> pushoffsetclosure2
-    | Instr.PUSHOFFSETCLOSURE -> pushoffsetclosure 
+    | Instr.PUSHOFFSETCLOSUREM2 -> pushoffsetclosurem2  >> step
+    | Instr.PUSHOFFSETCLOSURE0 -> pushoffsetclosure0 >> step
+    | Instr.PUSHOFFSETCLOSURE2 -> pushoffsetclosure2 >> step
+    | Instr.PUSHOFFSETCLOSURE -> pushoffsetclosure  >> step
     
-    | Instr.GETGLOBAL -> getglobal
-    | Instr.PUSHGETGLOBAL -> pushgetglobal
-    | Instr.GETGLOBALFIELD -> getglobalfield
-    | Instr.PUSHGETGLOBALFIELD -> pushgetglobalfield
-    | Instr.SETGLOBAL -> setglobal
+    | Instr.GETGLOBAL -> getglobal >> step
+    | Instr.PUSHGETGLOBAL -> pushgetglobal >> step
+    | Instr.GETGLOBALFIELD -> getglobalfield >> step
+    | Instr.PUSHGETGLOBALFIELD -> pushgetglobalfield >> step
+    | Instr.SETGLOBAL -> setglobal >> step
     
-    | Instr.ATOM0 -> atom0
-    | Instr.ATOM -> atom
+    | Instr.ATOM0 -> atom0 >> step
+    | Instr.ATOM -> atom >> step
     
-    | Instr.PUSHATOM0 -> pushatom0
-    | Instr.PUSHATOM -> pushatom
+    | Instr.PUSHATOM0 -> pushatom0 >> step
+    | Instr.PUSHATOM -> pushatom >> step
     
-    | Instr.MAKEBLOCK -> makeblock
-    | Instr.MAKEBLOCK1 -> makeblockn (const 1)
-    | Instr.MAKEBLOCK2 -> makeblockn (const 2)
-    | Instr.MAKEBLOCK3 -> makeblockn (const 3)
-    | Instr.MAKEFLOATBLOCK -> makefloatblock
+    | Instr.MAKEBLOCK -> makeblock >> step
+    | Instr.MAKEBLOCK1 -> makeblockn (const 1) >> step
+    | Instr.MAKEBLOCK2 -> makeblockn (const 2) >> step
+    | Instr.MAKEBLOCK3 -> makeblockn (const 3) >> step
+    | Instr.MAKEFLOATBLOCK -> makefloatblock >> step
     
-    | Instr.GETFIELD0 -> getfieldn (const 0)
-    | Instr.GETFIELD1 -> getfieldn (const 1)
-    | Instr.GETFIELD2 -> getfieldn (const 2)
-    | Instr.GETFIELD3 -> getfieldn (const 3)
-    | Instr.GETFIELD -> getfield
-    | Instr.GETFLOATFIELD -> getfloatfield
+    | Instr.GETFIELD0 -> getfieldn (const 0) >> step
+    | Instr.GETFIELD1 -> getfieldn (const 1) >> step
+    | Instr.GETFIELD2 -> getfieldn (const 2) >> step
+    | Instr.GETFIELD3 -> getfieldn (const 3) >> step
+    | Instr.GETFIELD -> getfield >> step
+    | Instr.GETFLOATFIELD -> getfloatfield >> step
 
-    | Instr.SETFIELD0 -> setfieldn (const 0)
-    | Instr.SETFIELD1 -> setfieldn (const 1) 
-    | Instr.SETFIELD2 -> setfieldn (const 2) 
-    | Instr.SETFIELD3 -> setfieldn (const 3) 
-    | Instr.SETFIELD -> setfield
-    | Instr.SETFLOATFIELD -> setfloatfield 
+    | Instr.SETFIELD0 -> setfieldn (const 0) >> step
+    | Instr.SETFIELD1 -> setfieldn (const 1) >> step
+    | Instr.SETFIELD2 -> setfieldn (const 2) >> step
+    | Instr.SETFIELD3 -> setfieldn (const 3) >> step
+    | Instr.SETFIELD -> setfield >> step
+    | Instr.SETFLOATFIELD -> setfloatfield  >> step
     
-    | Instr.VECTLENGTH -> vectlength
-    | Instr.GETVECTITEM -> getvectitem
-    | Instr.SETVECTITEM -> setvectitem
+    | Instr.VECTLENGTH -> vectlength >> step
+    | Instr.GETVECTITEM -> getvectitem >> step
+    | Instr.SETVECTITEM -> setvectitem >> step
     
-    | Instr.GETSTRINGCHAR -> getstringchar
-    | Instr.SETSTRINGCHAR -> setstringchar
+    | Instr.GETSTRINGCHAR -> getstringchar >> step
+    | Instr.SETSTRINGCHAR -> setstringchar >> step
     
-    | Instr.BRANCH -> branch
-    | Instr.BRANCHIF -> branchif
-    | Instr.BRANCHIFNOT -> branchifnot
-    | Instr.SWITCH -> switch
+    | Instr.BRANCH -> branch >> step
+    | Instr.BRANCHIF -> branchif >> step
+    | Instr.BRANCHIFNOT -> branchifnot >> step
+    | Instr.SWITCH -> switch >> step
     
-    | Instr.BOOLNOT -> boolnot
+    | Instr.BOOLNOT -> boolnot >> step
     
-    | Instr.PUSHTRAP -> pushtrap
-    | Instr.POPTRAP -> poptrap
-    | Instr.RAISE -> raise_
+    | Instr.PUSHTRAP -> pushtrap >> step
+    | Instr.POPTRAP -> poptrap >> step
+    | Instr.RAISE -> raise_ >> step
     
-    | Instr.CHECK_SIGNALS -> check_signals
+    | Instr.CHECK_SIGNALS -> check_signals >> step
+
+    (* argument is number of elements to pop from stack *)
+    | Instr.C_CALL1 -> c_call (const 1) 
+    | Instr.C_CALL2 -> c_call (const 2) 
+    | Instr.C_CALL3 -> c_call (const 3) 
+    | Instr.C_CALL4 -> c_call (const 4) 
+    | Instr.C_CALL5 -> c_call (const 5) 
+    | Instr.C_CALLN -> c_call (const 0)
     
-    | Instr.C_CALL1 -> c_call (const 0) (* argument is number of elements to pop from stack *)
-    | Instr.C_CALL2 -> c_call (const 1) 
-    | Instr.C_CALL3 -> c_call (const 2) 
-    | Instr.C_CALL4 -> c_call (const 3) 
-    | Instr.C_CALL5 -> c_call (const 4) 
-    | Instr.C_CALLN -> c_calln
+    | Instr.CONST0 -> constn (const 0) >> step
+    | Instr.CONST1 -> constn (const 1) >> step
+    | Instr.CONST2 -> constn (const 2) >> step
+    | Instr.CONST3 -> constn (const 3) >> step
+    | Instr.CONSTINT -> constint >> step
     
-    | Instr.CONST0 -> constn (const 0)
-    | Instr.CONST1 -> constn (const 1)
-    | Instr.CONST2 -> constn (const 2)
-    | Instr.CONST3 -> constn (const 3)
-    | Instr.CONSTINT -> constint
+    | Instr.PUSHCONST0 -> pushconstn (const 0) >> step
+    | Instr.PUSHCONST1 -> pushconstn (const 1) >> step
+    | Instr.PUSHCONST2 -> pushconstn (const 2) >> step
+    | Instr.PUSHCONST3 -> pushconstn (const 3) >> step
+    | Instr.PUSHCONSTINT -> pushconstint >> step
     
-    | Instr.PUSHCONST0 -> pushconstn (const 0)
-    | Instr.PUSHCONST1 -> pushconstn (const 1) 
-    | Instr.PUSHCONST2 -> pushconstn (const 2) 
-    | Instr.PUSHCONST3 -> pushconstn (const 3) 
-    | Instr.PUSHCONSTINT -> pushconstint
+    | Instr.NEGINT -> negint >> step
+    | Instr.ADDINT -> addint >> step
+    | Instr.SUBINT -> subint >> step
+    | Instr.MULINT -> mulint >> step
+    | Instr.DIVINT -> divint >> step
+    | Instr.MODINT -> modint >> step
+    | Instr.ANDINT -> andint >> step
+    | Instr.ORINT -> orint >> step
+    | Instr.XORINT -> xorint >> step
+    | Instr.LSLINT -> lslint >> step
+    | Instr.LSRINT -> lsrint >> step
+    | Instr.ASRINT -> asrint >> step
     
-    | Instr.NEGINT -> negint
-    | Instr.ADDINT -> addint
-    | Instr.SUBINT -> subint
-    | Instr.MULINT -> mulint
-    | Instr.DIVINT -> divint
-    | Instr.MODINT -> modint
-    | Instr.ANDINT -> andint
-    | Instr.ORINT -> orint
-    | Instr.XORINT -> xorint
-    | Instr.LSLINT -> lslint
-    | Instr.LSRINT -> lsrint
-    | Instr.ASRINT -> asrint
+    | Instr.EQ -> eq >> step
+    | Instr.NEQ -> neq >> step
+    | Instr.LTINT -> ltint >> step
+    | Instr.LEINT -> leint >> step
+    | Instr.GTINT -> gtint >> step
+    | Instr.GEINT -> geint >> step
     
-    | Instr.EQ -> eq
-    | Instr.NEQ -> neq
-    | Instr.LTINT -> ltint
-    | Instr.LEINT -> leint
-    | Instr.GTINT -> gtint
-    | Instr.GEINT -> geint
+    | Instr.OFFSETINT -> offsetint >> step
+    | Instr.OFFSETREF -> offsetref >> step
+    | Instr.ISINT -> isint >> step
+    | Instr.GETMETHOD -> getmethod >> step
     
-    | Instr.OFFSETINT -> offsetint
-    | Instr.OFFSETREF -> offsetref
-    | Instr.ISINT -> isint
-    | Instr.GETMETHOD -> getmethod
+    | Instr.BEQ -> beq >> step
+    | Instr.BNEQ -> bneq >> step
+    | Instr.BLTINT -> bltint >> step
+    | Instr.BLEINT -> bleint >> step
+    | Instr.BGTINT -> bgtint >> step
+    | Instr.BGEINT -> bgeint >> step
     
-    | Instr.BEQ -> beq
-    | Instr.BNEQ -> bneq
-    | Instr.BLTINT -> bltint
-    | Instr.BLEINT -> bleint
-    | Instr.BGTINT -> bgtint
-    | Instr.BGEINT -> bgeint
+    | Instr.ULTINT -> ultint >> step
+    | Instr.UGEINT -> ugeint >> step
+    | Instr.BULTINT -> bultint >> step
+    | Instr.BUGEINT -> bugeint >> step
     
-    | Instr.ULTINT -> ultint
-    | Instr.UGEINT -> ugeint
-    | Instr.BULTINT -> bultint
-    | Instr.BUGEINT -> bugeint
+    | Instr.GETPUBMET -> getpubmet >> step
+    | Instr.GETDYNMET -> getdynmet >> step
     
-    | Instr.GETPUBMET -> getpubmet
-    | Instr.GETDYNMET -> getdynmet
-    
-    | Instr.STOP -> stop
-    | Instr.EVENT -> event
-    | Instr.BREAK -> break
-    | Instr.RERAISE -> reraise
-    | Instr.RAISE_NOTRACE-> raise_notrace
+    | Instr.STOP -> stop >> return `stop
+    | Instr.EVENT -> event >> step
+    | Instr.BREAK -> break >> step
+    | Instr.RERAISE -> reraise >> step
+    | Instr.RAISE_NOTRACE-> raise_notrace >> step
   
 end
 

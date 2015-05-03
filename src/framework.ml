@@ -107,6 +107,11 @@ let trace_val m v =
     (rem v 4L = 0L) && v >= bytecode_address && v < (add bytecode_address bytecode_size)
   in
   let header, field = header m.memory, field m.memory in
+  let printstr str = 
+    String.init (min 31 (String.length str)) (fun i ->
+      let c = String.get str i in
+      if c >= ' ' && c <= '~' then c else '?')
+  in
   if is_int v = 1L then printf "=long%Li" (shift_right v 1)
   else if in_program v then printf "=code@%Li" (codeofs v)
   else if is_block v = 1L then begin
@@ -115,7 +120,7 @@ let trace_val m v =
     let dump_fields () = 
       if size <> 0 then begin
         printf "=(";
-        for i=0 to min (size-1) 3 do
+        for i=0 to min (size-1) 20 do
           if i<>0 then printf ", ";
           printf "0x%Lx" (field v i);
         done;
@@ -127,7 +132,7 @@ let trace_val m v =
       dump_fields()
     end else if tag = string_tag then begin
       let str = get_string m.memory v in
-      printf "=string[s%iL%i]='%s'" size (String.length str) str;
+      printf "=string[s%iL%i]='%s'" size (String.length str) (printstr str);
       dump_fields()
     end else if tag = double_tag then begin
       printf "=float[s%i]=%s" size (string_of_float (Int64.float_of_bits (field v 0)));
@@ -139,13 +144,17 @@ let trace_val m v =
       printf "=block<T%Li/s%i>" tag size
   end else printf "=unknown"
 
-let trace ~m ~env ~sp ~accu = 
+let trace ~m ~env ~sp ~accu ~trapsp ~eargs = 
   let trace_val = trace_val m in
   let sp = Int64.to_int sp in
+  let trapsp = Int64.to_int trapsp in
+  let eargs = Int64.to_int eargs in
   let stack_size = (m.stack_address - sp) / 8 in
+  let trap_stack_size = (m.stack_address - trapsp) / 8 in
   printf "env="; trace_val env; printf "\n";
   printf "accu="; trace_val accu; printf "\n";
-  printf " sp=0x%x @%i:\n" sp stack_size;
+  (*printf " sp=0x%x @%i:\n" sp stack_size;*)
+  printf " sp=0x%x @%i: trapsp=0x%x @%i extra_args=%i\n" sp stack_size trapsp trap_stack_size eargs;
   for i=0 to min (stack_size-1) 15 do
     printf "[%i] " (stack_size-i); trace_val m.memory.{ (sp/8)+i }; printf "\n"
   done
@@ -198,7 +207,8 @@ let make cfg exe =
 
   let memory = init_memory exe mem_size_words in
 
-  let trace () = trace ~m:memory ~env:o.env#i64 ~sp:o.sp#i64 ~accu:o.sp#i64 in
+  let trace () = 
+    trace ~m:memory ~env:o.env#i64 ~sp:o.sp#i64 ~accu:o.sp#i64 ~trapsp:0L ~eargs:0L in
 
   S.reset sim;
   i.bytecode_start_address#i memory.code_address;
@@ -267,14 +277,17 @@ let make cfg exe =
         begin if cfg.instr_trace then 
           Printf.printf "c_call_request: [%i]%s\n" prim exe.Load.prim.(prim);
         end;
-        let value = C_runtime.run 
-          exe prim
-          C_runtime.({
-            env=o.env#i64;
-            accu=o.accu#i64;
-            sp=o.sp#i;
-            memory=memory.memory;
-          })
+        let value = 
+          match C_runtime.run 
+            exe prim
+            C_runtime.({ Machine.empty with
+              Machine.env=o.env#i64;
+              accu=o.accu#i64;
+              sp=o.sp#i64;
+              memory=memory.memory;
+            }) with
+          | `ok v -> v
+          | `exn _ -> failwith "c-call exn not implemented"
         in
         i.c_call_result#i64 value;
         i.c_call_ready#i 1;

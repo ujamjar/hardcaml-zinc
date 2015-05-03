@@ -1,19 +1,15 @@
 (* c-runtime hacks *)
 
-type state = 
-  {
-    env : int64;
-    accu : int64;
-    sp : int;
-    memory : Repr.memory;
-  }
+open Machine
+
+type result = [ `ok of int64 | `exn of int64 ]
 
 type c_call = 
-  | C1 of (state -> int64 -> int64)
-  | C2 of (state -> int64 -> int64 -> int64)
-  | C3 of (state -> int64 -> int64 -> int64 -> int64)
-  | C4 of (state -> int64 -> int64 -> int64 -> int64 -> int64)
-  | C5 of (state -> int64 -> int64 -> int64 -> int64 -> int64 -> int64)
+  | C1 of (state -> int64 -> result)
+  | C2 of (state -> int64 -> int64 -> result)
+  | C3 of (state -> int64 -> int64 -> int64 -> result)
+  | C4 of (state -> int64 -> int64 -> int64 -> int64 -> result)
+  | C5 of (state -> int64 -> int64 -> int64 -> int64 -> int64 -> result)
   | CN
 
 open Int64
@@ -29,7 +25,7 @@ let init addr size =
 
 let bump size = 
   c_heap_address := !c_heap_address + size;
-  (*Printf.printf "C_runtime.bump %i (%i/%i)\n" size !c_heap_address !c_heap_address_max;*)
+  (*Printf.printf "C_runtime.bump %i %x\n" size (!c_heap_address * 8);*)
   if not (!c_heap_address <= !c_heap_address_max) then failwith "c-heap out of memory"
 
 (* allocate a block in the c-heap. *)
@@ -47,7 +43,7 @@ let get_obj : state -> int64 -> 'a = fun st p ->
 
 let alloc_block_from : state -> 'a -> int64 = fun st a -> 
   let p = !c_heap_address in
-  let a = get_repr a (p * 8) in
+  let a = get_repr a p in
   let size = Array.length a in
   bump size;
   for i=0 to size - 1 do
@@ -59,94 +55,198 @@ let header st v = st.memory.{((to_int v) / 8)-1}
 let field st v i = st.memory.{((to_int v) / 8)+i} 
 let set_field st v i d = st.memory.{((to_int v) / 8)+i} <- d
 
-let c1_unit = C1 (fun _ _ -> val_unit)
-let c2_unit = C2 (fun _ _ _ -> val_unit)
-let c3_unit = C3 (fun _ _ _ _ -> val_unit)
-let c4_unit = C4 (fun _ _ _ _ _ -> val_unit)
-let c5_unit = C5 (fun _ _ _ _ _ _ -> val_unit)
+let c1_unit = C1 (fun _ _ -> `ok val_unit)
+let c2_unit = C2 (fun _ _ _ -> `ok val_unit)
+let c3_unit = C3 (fun _ _ _ _ -> `ok val_unit)
+let c4_unit = C4 (fun _ _ _ _ _ -> `ok val_unit)
+let c5_unit = C5 (fun _ _ _ _ _ _ -> `ok val_unit)
 
-let c1_id = C1 (fun _ a -> a)
+let c1_id = C1 (fun _ a -> `ok a)
 
-let c1_int i = C1 (fun _ _ -> val_int i)
-let c1_true = C1 (fun _ _ -> val_true)
-let c1_false = C1 (fun _ _ -> val_false)
+let c1_int i = C1 (fun _ _ -> `ok (val_int i))
+let c1_true = C1 (fun _ _ -> `ok val_true)
+let c1_false = C1 (fun _ _ -> `ok val_false)
 
-let set_oo_id = 
+let caml_set_oo_id = 
   let c = ref 1L in
   C1 (fun st ptr ->
     set_field st ptr 0 !c;
     c := add !c 2L;
-    ptr)
+    `ok ptr)
 
-let int64_float_of_bits = 
+let caml_int64_float_of_bits = 
   C1 (fun st v ->
     let p = alloc_block st 1L black double_tag in
     set_field st p 0 (field st v 1);
-    p)
+    `ok p)
 
-(* just supporting stdio for now *)
-let open_descriptor =
+let file_descrs_in = ref []
+let file_descrs_out = ref []
+
+let descr_block st fd = 
+  let p = alloc_block st 2L white custom_tag in (* int * int, fd is second field *)
+  set_field st p 0 1L;
+  set_field st p 1 fd;
+  p
+
+let get_descr x = (* XXX assumption; file_descr <=> int *) 
+  (Obj.magic (Int64.to_int (int_val x)) : Unix.file_descr)
+
+let find_chan_in st p = 
+  try fst @@ List.assoc (field st p 1) !file_descrs_in
+  with _ -> failwith ("in channel not found (" ^ Int64.to_string (field st p 1) ^ ")")
+
+let find_chan_out st p = 
+  try fst @@ List.assoc (field st p 1) !file_descrs_out
+  with _ -> failwith ("out channel not found (" ^ Int64.to_string (field st p 1) ^ ")")
+
+let caml_ml_open_descriptor_in = 
+  C1 (fun st fd -> 
+    let fd' = get_descr fd in
+    let p = descr_block st fd in
+    file_descrs_in := (fd, (Unix.in_channel_of_descr fd', p)) :: !file_descrs_in;
+    `ok p)
+
+let caml_ml_open_descriptor_out = 
+  C1 (fun st fd -> 
+    let fd' = get_descr fd in
+    let p = descr_block st fd in
+    file_descrs_out := (fd, (Unix.out_channel_of_descr fd', p)) :: !file_descrs_out;
+    `ok p)
+
+let caml_ml_close_channel = 
   C1 (fun st fd ->
-    if int_val fd < 0L || int_val fd > 2L then failwith "open_descriptor"
-    else
-      (* allocate a simple custom block for the result storing just the fd *)
-      let p = alloc_block st 2L white custom_tag in
-      set_field st p 0 1L;
-      set_field st p 1 fd;
-      p)
+    (try close_in (find_chan_in st fd)
+    with _ -> close_out (find_chan_out st fd));
+    `ok val_unit)
 
-let out_channels_list = C1 (fun st _ -> val_unit)
+let mk_list st l = List.fold_right
+  (fun p l -> 
+    let x = alloc_block st 2L 0L white in
+    set_field st x 0 p;
+    set_field st x 1 l;
+    x)
+  l (val_int 0L) 
 
-let output_char = 
-  C2 (fun st fd c ->
-    output_char stdout (Char.chr (to_int (int_val c)));
-    val_unit)
+let caml_ml_out_channels_list = 
+  C1 (fun st _ -> `ok (mk_list st (List.map (fun (_,(_,p)) -> p) !file_descrs_out)))
 
-let string_length = 
+let caml_ml_output_char = 
+  C2 (fun st chan c ->
+    output_char (find_chan_out st chan) (Char.chr (to_int (int_val c)));
+    `ok val_unit)
+
+let caml_ml_flush = 
+  C1 (fun st chan ->
+    let chan = find_chan_out st chan in
+    flush chan;
+    `ok val_unit)
+
+let caml_ml_string_length = 
   C1 (fun st v ->
     assert (string_tag = tag (header st v));
     let size = to_int @@ size (header st v) in
     let pad = to_int @@ shift_right_logical (field st v (size-1)) 56 in
-    val_int @@ of_int @@ ((size * 8) - pad - 1)
+    `ok (val_int @@ of_int @@ ((size * 8) - pad - 1))
   )
 
-(*let get_string st v = 
-  let size = to_int @@ size (header st v) in
-  let pad = to_int @@ shift_right_logical (field st v (size-1)) 56 in
-  String.init ((size*8)-pad-1) 
-    (fun i ->
-      Char.chr (to_int @@ 
-        logand 0xFFL @@
-        shift_right_logical 
-          (field st v (i/8)) 
-          ((i mod 8)*8)))*)
 let get_string st v = (get_obj st v : string)
 
-let output_string = 
+let caml_ml_output = 
   C4 (fun st chan bytes ofs len ->
     let str = get_string st bytes in
-    output_substring stdout str (to_int @@ int_val ofs) (to_int @@ int_val len);
-    val_unit)
+    output_substring (find_chan_out st chan) str 
+      (to_int @@ int_val ofs) (to_int @@ int_val len);
+    `ok val_unit)
 
-let alloc_string = 
+let caml_ml_input_scan_line =
+  C1 (fun st fd ->
+    let chan = find_chan_in st fd in
+    let pos = pos_in chan in
+    let rec f n = 
+      try 
+        if input_char chan = '\n' then n+1
+        else f (n+1)
+      with _ -> -n
+    in
+    let n = f 0 in
+    let () = seek_in chan pos in (* restore file pos (I think) *)
+    `ok (val_int (Int64.of_int n)))
+
+let set_byte st s ofs b = 
+  let w = field st s (ofs / 8) in
+  let sft = of_int ((ofs land 7) * 8)  in
+  let mask = ~: (sll 255L sft) in
+  let b = Int64.of_int (Char.code b) in
+  let b = sll b sft in
+  set_field st s  (ofs / 8) ((w &: mask) |: b)
+
+let get_byte st s ofs = 
+  let w = field st s (ofs / 8) in
+  let sft = of_int ((ofs land 7) * 8)  in
+  (srl w sft) &: 255L 
+
+let caml_ml_input =
+  C4 (fun st ic s ofs len -> 
+    let ofs = Int64.to_int (int_val ofs) in
+    let len = Int64.to_int (int_val len) in
+    let b = Bytes.create len in
+    let ichan = find_chan_in st ic in
+    let len = input ichan b 0 len in
+    for i=0 to len-1 do
+      set_byte st s (ofs+i) (Bytes.get b i)
+    done;
+    `ok (val_int (Int64.of_int len)))
+
+let caml_ml_input_char = 
+  C1 (fun st ic ->
+    let chan = find_chan_in st ic in
+    let ch = Char.code (input_char chan) in
+    `ok (val_int (of_int ch)))
+
+external open_desc : string -> open_flag list -> int -> int = "caml_sys_open"
+
+let caml_sys_open =
+  C3 (fun st fname mode perm ->
+    let fname = get_string st fname in
+    let mode = (get_obj st mode : open_flag list) in
+    let perm = Int64.to_int (int_val perm) in
+    (*Printf.printf "sys_open %s, mode=%i, perm=%x\n"
+      fname (List.length mode) perm;*)
+    let fd = open_desc fname mode perm in
+    `ok (val_int (Int64.of_int fd)))
+
+let caml_create_string = 
   C1 (fun st len ->
-    let x = String.make (to_int len) (Char.chr 0) in
-    alloc_block_from st x)
+    let x = String.make (to_int (int_val len)) (Char.chr 0) in
+    `ok (alloc_block_from st x))
 
-let get_argv = 
+let caml_blit_string = 
+  C5 (fun st s1 ofs1 s2 ofs2 n -> 
+    let n = to_int (int_val n) in
+    let ofs1 = to_int (int_val ofs1) in
+    let ofs2 = to_int (int_val ofs2) in
+    for i=0 to n-1 do
+      let b = Char.chr @@ to_int @@ (get_byte st s1 (ofs1+i)) in
+      set_byte st s2 (ofs2+i) b
+    done;
+    `ok val_unit)
+
+let argv = ref ("hardcamlzinc", [|"hardcamlzinc"|])
+
+let caml_sys_get_argv = 
   C1 (fun st _ ->
-    let x = ("hardcamlzinc", [|"hardcamlzinc"|]) in
-    alloc_block_from st x)
+    `ok (alloc_block_from st !argv))
 
-let get_config = 
-  C1 (fun st _ -> alloc_block_from st ("hardcamlzinc", 64, false))
+let caml_sys_get_config = 
+  C1 (fun st _ -> `ok (alloc_block_from st ("hardcamlzinc", 64, false)))
 
-let get_env = 
+let caml_sys_getenv = 
   C1 (fun st v ->
     let v = get_string st v in
-    alloc_block_from st (Sys.getenv v))
+    `ok (alloc_block_from st (Sys.getenv v)))
 
-let make_vect =
+let caml_make_vect =
   C2 (fun st len init ->
     let len = int_val len in
     if len = 0L then failwith "make_vect: fixme - atom0"
@@ -159,9 +259,17 @@ let make_vect =
       for i=0 to (to_int len)-1 do
         set_field st p i init
       done;
-      p)
+      `ok p)
 
-let obj_block =
+let caml_array_get_addr = 
+  C2 (fun st a idx ->
+    let idx = int_val idx in
+    let size = size (header st a) in
+    (* XXX bounds check *)
+    if idx >= size || idx < 0L then `exn (val_false)
+    else `ok (field st a (to_int idx)))
+
+let caml_obj_block =
   C2 (fun st tag size -> 
     let size = int_val size in
     let tag = int_val size in
@@ -169,19 +277,19 @@ let obj_block =
     for i=0 to (to_int size)-1 do
       set_field st p i (val_int 0L)
     done;
-    p)
+    `ok p)
 
-let obj_dup = 
+let caml_obj_dup = 
   C1 (fun st obj ->
     let size = size (header st obj) in
-    if size=0L then obj
+    if size=0L then `ok obj
     else 
       let tag = tag (header st obj) in
       let p = alloc_block st size tag white in
       for i=0 to (to_int size)-1 do
         set_field st p i (field st obj i)
       done;
-      p)
+      `ok p)
 
 module type Int = sig
   type t
@@ -241,7 +349,7 @@ module Int_c_calls(I : Int) = struct
       let c = f (I.to_t a) (I.to_t b) in
       set_field st p 0 0L; (* XXX should point to custom allocation block... *)
       set_field st p 1 (Repr.int64_of_obj Obj.(field (repr c) 1));
-      p)
+      `ok p)
 
   let op1 f =
     C1 (fun st a ->
@@ -249,7 +357,7 @@ module Int_c_calls(I : Int) = struct
       let c = f (I.to_t a) in
       set_field st p 0 0L; (* XXX should point to custom allocation block... *)
       set_field st p 1 (Repr.int64_of_obj Obj.(field (repr c) 1));
-      p)
+      `ok p)
 
   let sftop f =
     C2 (fun st a b ->
@@ -257,7 +365,7 @@ module Int_c_calls(I : Int) = struct
       let c = f (I.to_t a) (to_int (int_val b)) in
       set_field st p 0 0L; (* XXX should point to custom allocation block... *)
       set_field st p 1 (Repr.int64_of_obj Obj.(field (repr c) 1));
-      p)
+      `ok p)
 
   let c_calls = [
     "caml_" ^ I.name ^ "_add", op2 I.add;
@@ -282,32 +390,40 @@ module Int32_c_calls = Int_c_calls(Int32_c_ops)
 
 let c_calls = [
   "caml_register_named_value", c2_unit;
-  "caml_set_oo_id", set_oo_id;
-  "caml_int64_float_of_bits", int64_float_of_bits;
-  "caml_ml_open_descriptor_in", open_descriptor;
-  "caml_ml_open_descriptor_out", open_descriptor;
-  "caml_ml_output_char", output_char;
-  "caml_ml_string_length", string_length;
-  "caml_ml_output", output_string;
-  "caml_ml_out_channels_list", out_channels_list;
-  "caml_create_string", alloc_string;
-  "caml_sys_get_argv", get_argv;
-  "caml_sys_get_config", get_config;
+  "caml_set_oo_id", caml_set_oo_id;
+  "caml_int64_float_of_bits", caml_int64_float_of_bits;
+  "caml_ml_open_descriptor_in", caml_ml_open_descriptor_in;
+  "caml_ml_open_descriptor_out", caml_ml_open_descriptor_out;
+  "caml_ml_close_channel", caml_ml_close_channel;
+  "caml_ml_output_char", caml_ml_output_char;
+  "caml_ml_string_length", caml_ml_string_length;
+  "caml_ml_output", caml_ml_output;
+  "caml_ml_out_channels_list", caml_ml_out_channels_list;
+  "caml_ml_flush", caml_ml_flush;
+  "caml_ml_input_scan_line", caml_ml_input_scan_line;
+  "caml_ml_input", caml_ml_input;
+  "caml_ml_input_char", caml_ml_input_char;
+  "caml_create_string", caml_create_string;
+  "caml_blit_string", caml_blit_string;
+  "caml_sys_open", caml_sys_open;
+  "caml_sys_get_argv", caml_sys_get_argv;
+  "caml_sys_get_config", caml_sys_get_config;
   "caml_sys_const_big_endian", c1_false;
   "caml_sys_const_word_size", c1_int 64L;
   "caml_sys_const_ostype_unix", c1_true;
   "caml_sys_const_ostype_win32", c1_false;
   "caml_sys_const_ostype_cygwin", c1_false;
-  "caml_sys_getenv", get_env;
-  "caml_make_vect", make_vect;
-  "caml_obj_block", obj_block;
-  "caml_obj_dup", obj_dup;
+  "caml_sys_getenv", caml_sys_getenv;
+  "caml_make_vect", caml_make_vect;
+  "caml_array_get_addr", caml_array_get_addr;
+  "caml_obj_block", caml_obj_block;
+  "caml_obj_dup", caml_obj_dup;
 ] @ Nativeint_c_calls.c_calls
   @ Int64_c_calls.c_calls
   @ Int32_c_calls.c_calls
 
 let run bc prim st =
-  let arg ofs = st.memory.{st.sp/8 + ofs} in
+  let arg ofs = st.memory.{(to_int st.sp) / 8 + ofs} in
   match List.assoc bc.Load.prim.(prim) c_calls with
   | C1(f) -> f st st.accu
   | C2(f) -> f st st.accu (arg 1)
