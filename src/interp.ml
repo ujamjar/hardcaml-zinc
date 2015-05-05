@@ -34,18 +34,15 @@ module type State = sig
   val get_mem : st -> cache -> t -> t * st
   val set_mem : st -> cache -> t -> t -> st
 
-  (* c-calls *)
-
-  type c_call_result
-  val c_call : t -> st -> c_call_result * st
-  val c_call_exn : c_call_result -> t
-  val c_call_val : c_call_result -> t
-
   (* control *)
   
   val cond : st -> t -> (st -> unit * st) -> (st -> unit * st) -> st
   val iter_up : st -> t -> t -> (t -> st -> unit * st) -> st
   val iter_dn : st -> t -> t -> (t -> st -> unit * st) -> st
+
+  (* oo *)
+
+  val dynmet : st -> t -> t -> t * st
 
   (* debugging *)
 
@@ -111,12 +108,6 @@ module State_eval = struct
     with Invalid_argument x ->
       raise (Invalid_argument ("set_mem {" ^ Int64.to_string adr ^ "} " ^ x))
 
-  type c_call_result = C_runtime.result
-  let c_call prim st = 
-    (C_runtime.(run st.exe (Int64.to_int prim) st), st)
-  let c_call_exn = function `ok _ -> 0L | `exn _ -> 1L
-  let c_call_val = function `ok v | `exn v -> v
-  
   let cond st c t f = 
     snd @@ if c <> 0L then t st else f st
 
@@ -140,6 +131,18 @@ module State_eval = struct
 
   include Ops.Int64
 
+  let dynmet st meths hi = 
+    let li = ref 3L in
+    let hi = ref hi in
+    let mi = ref 0L in
+    while (!li < !hi) do
+      mi := (sra (!li +: !hi) 1L) |: 1L;
+      let fld,_ = get_mem st `mem ((srl meths 3L) +: !mi) in
+      if 1L = (st.accu <+ fld) then hi := !mi -: (const 2)
+      else li := !mi
+    done;
+    !li, st
+
   let string_of_value = Int64.to_string
 
 end
@@ -153,12 +156,10 @@ module State_poly = struct
     | Set_mem of cache * t * t
     | Cond of t * cmd list * cmd list
     | Iter of bool * int * t * t * cmd list
-    | C_call of t 
   and t = 
     | Op of string * t * t
     | Val of int
     | Const of int
-    | C_call_result 
   and st = 
     {
       id : int;
@@ -183,11 +184,6 @@ module State_poly = struct
 
   let set_mem st c adr v = { st with cmd = Set_mem(c, adr, v) :: st.cmd }
 
-  type c_call_result = t
-  let c_call prim st = (C_call_result, { st with cmd = C_call(prim) :: st.cmd })
-  let c_call_exn t = t
-  let c_call_val t = t (* XXX ??? *)
-
   let cond st c t f = 
     let (),st_t = t {id = st.id; cmd = []} in
     let (),st_f = f {id = st_t.id; cmd = []} in
@@ -200,6 +196,8 @@ module State_poly = struct
 
   let iter_up = iter true
   let iter_dn = iter false
+
+  let dynmet st meths hi = failwith "DYNMET" (* XXX TODO *)
 
   let const i = Const(i)
   let zero = const 0
@@ -236,7 +234,6 @@ module State_poly = struct
     | Op(o,a,b) -> "(" ^ string_of_value a ^ o ^ string_of_value b ^ ")"
     | Val(i) -> "_" ^ string_of_int i
     | Const i -> string_of_int i
-    | C_call_result -> "c_call_result"
 
   let rec print lev st = 
     let open Printf in
@@ -258,8 +255,6 @@ module State_poly = struct
           (if d then "to" else "downto") (string_of_value n);
         print (lev+2) b;
         printf "%sdone\n" pad
-      | C_call(prim) ->
-        printf "%sc_call prim=%s\n" pad (string_of_value prim)
       )
       (List.rev st)
 
@@ -293,9 +288,9 @@ module type Monad = sig
   val read_mem : cache -> S.t -> S.t t
   val write_mem : cache -> S.t -> S.t -> unit t
 
-  val c_call : S.t -> S.c_call_result t
-
   val read_bytecode : S.t -> S.t t
+
+  val dynmet : S.t -> S.t -> S.t t
 
 end 
   
@@ -338,8 +333,6 @@ module Monad(T : sig val trace : bool end)(S : State) = struct
   let write_mem cache adr value st = 
     ((), S.set_mem st cache (S.srl adr c3) value)
 
-  let c_call prim st = S.c_call prim st
-
   (* move logic into state *)
   let read_bytecode adr st = 
     let open S in
@@ -347,6 +340,8 @@ module Monad(T : sig val trace : bool end)(S : State) = struct
     let sel = adr &: (const 4) in
     let ins = sra (if sel = zero then sll ins c32 else ins) c32 in
     (ins, st)
+
+  let dynmet meths hi st = S.dynmet st meths hi
 
   (* XXX DEBUG XXX *)
   let trace = T.trace
@@ -400,13 +395,6 @@ module Monad(T : sig val trace : bool end)(S : State) = struct
       for_dn m n f
     else
       for_dn m n f
-
-  let c_call prim = 
-    if trace then
-      debug ("c_call prim=%i\n" ^ S.string_of_value prim ^ "\n") >>
-      c_call prim
-    else
-      c_call prim
 
   let read_bytecode adr = 
     if trace then
@@ -779,8 +767,8 @@ module Opcodes(M : Monad) = struct
   *)
   let restart =
     read_reg `env >>= header >>= fun hdr ->
-    let num_args = size hdr in
-    modify_reg `sp (fun sp -> sp -: num_args) >>
+    let num_args = size hdr -: (const 2) in
+    (*modify_reg `sp (fun sp -> sp -: num_args) >>*)
     read_reg `env >>= fun env ->
     for_dn (num_args -: one) zero 
       (fun i -> field env (i +: (const 2)) >>= push_stack) >>
@@ -815,15 +803,16 @@ module Opcodes(M : Monad) = struct
       write_reg `extra_args (earg -: required)
     end begin
       let num_args = earg +: one in
-      alloc (num_args +: (const 2)) closure_tag >>= fun ptr ->
-      read_reg `env >>= set_field ptr one >>
+      alloc (num_args +: (const 2)) closure_tag >>= fun accu ->
+      read_reg `env >>= set_field accu one >>
       for_up zero num_args
-        (fun i -> pop_stack >>= set_field ptr (i +: (const 2))) >>
+        (fun i -> pop_stack >>= set_field accu (i +: (const 2))) >>
       read_reg `pc >>= fun pc -> 
-      read_reg `accu >>= fun accu ->
       write_mem `mem accu (pc -: (pcofs (const 3))) >>
+      pop_stack >>= write_reg `pc >>
       pop_stack >>= write_reg `env >>
-      pop_stack >>= fun earg -> write_reg `extra_args (int_val earg)
+      pop_stack >>= fun earg -> write_reg `extra_args (int_val earg) >>
+      write_reg `accu accu
     end
   
 
@@ -915,9 +904,9 @@ module Opcodes(M : Monad) = struct
     for_up one nfuncs
       (fun i -> 
         let i2 = sll i one in
-        set_field ptr (one +: i2) (make_header i2 white infix_tag) >>
-        pop_arg >>= fun ofs -> set_field ptr ((const 2) +: i2) (pc +: (pcofs ofs)) >>
-        push_stack (ptr +: (aofs (one +: i2)))) >>
+        set_field ptr (i2 -: one) (make_header i2 white infix_tag) >>
+        pop_arg >>= fun ofs -> set_field ptr i2 (pc +: (pcofs ofs)) >>
+        push_stack (ptr +: (aofs i2))) >>
     write_reg `accu ptr
   
   (*
@@ -1344,10 +1333,6 @@ module Opcodes(M : Monad) = struct
       (return ()) (* XXX *)
       (read_stack one >>= write_reg `trapsp >> incr `sp (aofs (const 4))) 
 
-  let raise_notrace = not_implemented
-
-  let reraise = not_implemented
-
   (*
     Instruct(RAISE):
     raise_exception:
@@ -1382,8 +1367,12 @@ module Opcodes(M : Monad) = struct
         pop_stack >>= write_reg `pc >>
         pop_stack >>= write_reg `trapsp >>
         pop_stack >>= write_reg `env >>
-        pop_stack >>= fun eargs -> write_reg `extra_args (val_int eargs) 
+        pop_stack >>= fun eargs -> write_reg `extra_args (int_val eargs) 
       end
+
+  let raise_notrace = raise_
+
+  let reraise = raise_
 
   (************************************************************)
   (* Stack checks *)
@@ -1636,11 +1625,53 @@ module Opcodes(M : Monad) = struct
   (************************************************************)
   (* Object-oriented operations *)
 
-  let getmethod = not_implemented
+  (*
+    #define Lookup(obj, lab) Field (Field (obj, 0), Int_val(lab))
 
-  let getpubmet = not_implemented
+    Instruct(GETMETHOD):
+      accu = Lookup(sp[0], accu);
+      Next;
+  *)
+  let getmethod = 
+    read_reg `accu >>= fun lab ->
+    read_stack zero >>= fun obj ->
+    field obj zero >>= fun obj ->
+    field obj (int_val lab) >>= fun d ->
+    write_reg `accu d
 
-  let getdynmet = not_implemented
+  (*
+    Instruct(GETDYNMET): {
+      /* accu == tag, sp[0] == object, *pc == cache */
+      value meths = Field (sp[0], 0);
+      int li = 3, hi = Field(meths,0), mi;
+      while (li < hi) {
+        mi = ((li+hi) >> 1) | 1;
+        if (accu < Field(meths,mi)) hi = mi-2;
+        else li = mi;
+      }
+      accu = Field (meths, li-1);
+      Next;
+    }
+  *)
+  let getdynmet = 
+    read_stack zero >>= fun d -> field d zero >>= fun meths ->
+    field meths zero >>= fun hi ->
+    M.dynmet meths hi >>= fun li ->
+    field meths (li -: one) >>= write_reg `accu
+
+  (*
+    Instruct(GETPUBMET):
+      *--sp = accu;
+      accu = Val_int( *pc);
+      pc += 2;
+      /* Fallthrough (to GETDYNMET) */
+  *)
+  let getpubmet = 
+    read_reg `accu >>= push_stack >>
+    read_bytecode zero >>= fun arg ->
+    write_reg `accu (val_int arg) >>
+    incr `pc (pcofs (const 2)) >>
+    getdynmet
 
   (************************************************************)
   (* Debugging and machine control *)

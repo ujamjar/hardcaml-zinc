@@ -12,6 +12,7 @@ module Make(M : Ops.S) = struct
   let is_block v = (~: v) &: one
 
   let make_header size colour tag = 
+    assert (tag < (const 256));
     (sll (tag    &: const 255) (const  0)) |:
     (sll (colour &: const   3) (const  8)) |:
     (sll  size                 (const 10)) 

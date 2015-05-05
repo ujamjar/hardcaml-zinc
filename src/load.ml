@@ -71,6 +71,7 @@ let bytecode_exe exe_name =
     }
   in
   close_in f;
+  Gc.major();
   exe
 
 

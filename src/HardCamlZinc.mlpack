@@ -1,10 +1,11 @@
 # OASIS_START
-# DO NOT EDIT (digest: 21164126adbec7ab46f5d0ceb4d44be0)
+# DO NOT EDIT (digest: d3085fda4be8a93993614f3becb19788)
 Arbiter
 Ops
 Mlvalues
 Machine
 Repr
+Trace
 Instr
 Interp
 Load

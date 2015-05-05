@@ -52,29 +52,25 @@ module S = Interp.State_eval
 module type M_eval = Interp.Monad 
     with type S.t = int64
      and type S.st = S.st
-module M : M_eval = Interp.Monad(struct let trace = !trace>2 end)(S) 
+module M : M_eval = Interp.Monad(struct let trace = !trace>3 end)(S) 
 module O = Interp.Opcodes(M)
+
+let () = if !trace>2 then Trace.showfields := true
 
 let state = 
   S.({
     initial() with
-      pc = Int64.of_int mm.Framework.code_address;
-      sp = Int64.of_int mm.Framework.stack_address;
-      env = Int64.of_int (mm.Framework.atoms_address + 8);
-      trapsp = Int64.of_int mm.Framework.stack_address;
-      global_data = Int64.of_int (mm.Framework.globals_address + 8);
-      atom_table = Int64.of_int (mm.Framework.atoms_address + 8);
-      alloc_base = Int64.of_int mm.Framework.heap_address;
-      stack_high = Int64.of_int mm.Framework.stack_address;
-      memory = mm.Framework.memory;
+      pc = Int64.of_int mm.code_address;
+      sp = Int64.of_int mm.stack_address;
+      env = Int64.of_int (mm.atoms_address + 8);
+      trapsp = Int64.of_int mm.stack_address;
+      global_data = Int64.of_int (mm.globals_address + 8);
+      atom_table = Int64.of_int (mm.atoms_address + 8);
+      alloc_base = Int64.of_int mm.heap_address;
+      stack_high = Int64.of_int mm.stack_address;
+      memory = mm.memory;
       exe = bytecode;
   })
-
-let is_c_call i =
-  let open Instr in
-  match i with
-  | C_CALL1 | C_CALL2 | C_CALL3 | C_CALL4 | C_CALL5 | C_CALLN -> true
-  | _ -> false
 
 let do_c_call st nargs prim = 
   let open Ops.Int64 in
@@ -101,28 +97,55 @@ let do_c_call st nargs prim =
   | `ok v -> Some( restore_after_c_call st v )
   | `exn v -> do_exception st v
 
+let get_instr memory pc = 
+  let instr = memory.{pc / 2} in
+  S.(sra (if pc mod 2 = 0 then sll instr 32L else instr) 32L) 
+
+let trace_instr st pc instr = 
+  let open Instr in
+  let get_arg n = get_instr st.memory (pc + 1 + n) in
+  printf "%6i  %s" pc (Show.show<Instr.opcodes> instr);
+  match instr with
+  | PUSHACC | ACC | POP | ASSIGN
+  | PUSHENVACC | ENVACC | PUSH_RETADDR | APPLY
+  | APPTERM1 | APPTERM2 | APPTERM3 | RETURN
+  | GRAB | PUSHGETGLOBAL | GETGLOBAL | SETGLOBAL
+  | PUSHATOM | ATOM | MAKEBLOCK1 | MAKEBLOCK2
+  | MAKEBLOCK3 | MAKEFLOATBLOCK
+  | GETFIELD | SETFIELD | GETFLOATFIELD | SETFLOATFIELD
+  | BRANCH | BRANCHIF | BRANCHIFNOT | PUSHTRAP
+  | CONSTINT | PUSHCONSTINT | OFFSETINT | OFFSETREF
+  | OFFSETCLOSURE | PUSHOFFSETCLOSURE ->
+    printf " %Ld\n" (get_arg 0)
+
+  | APPTERM | CLOSURE | CLOSUREREC | PUSHGETGLOBALFIELD
+  | GETGLOBALFIELD | MAKEBLOCK
+  | BEQ | BNEQ | BLTINT | BLEINT | BGTINT | BGEINT
+  | BULTINT | BUGEINT ->
+    printf " %Ld, %Ld\n" (get_arg 0) (get_arg 1)
+
+  | C_CALLN | C_CALL1 | C_CALL2 | C_CALL3 | C_CALL4 | C_CALL5 -> begin
+    if instr = C_CALLN then begin
+      printf "%Ld, " (get_arg 0);
+      printf " %s\n" state.exe.Load.prim.(Int64.to_int (get_arg 1))
+    end else 
+      printf " %s\n" state.exe.Load.prim.(Int64.to_int (get_arg 0))
+  end
+  | _ ->
+    printf "\n"
+
 let rec step n st = 
   let open S in
   (* fetch instruction *)
   let pc = Int64.to_int st.pc / 4 in
-  let get_instr pc = 
-    let instr = mm.Framework.memory.{pc / 2} in
-    S.(srl (if pc mod 2 = 0 then sll instr 32L else instr) 32L) 
-  in
-  let instr = get_instr pc in
+  let instr = get_instr st.memory pc in
   let st = { st with pc = S.(st.pc +: 4L) } in
   let instr = Enum.to_enum<Instr.opcodes> (Int64.to_int instr) in
   let () = 
     (if !trace>1 then printf "\n##%i\n" (n+1));
-    (if !trace>0 then begin
-      if is_c_call instr then
-        let prim = Int64.to_int @@ get_instr (Int64.to_int st.pc / 4) in
-        printf "%6i  %s %s\n" pc (Show.show<Instr.opcodes> instr) state.exe.Load.prim.(prim)
-      else
-        printf "%6i  %s\n" pc (Show.show<Instr.opcodes> instr)
-    end);
+    (if !trace>0 then trace_instr st pc instr);
     (if !trace>1 then
-      Framework.trace ~m:mm ~env:st.env ~sp:st.sp ~accu:st.accu 
+      Trace.machine ~m:mm ~env:st.env ~sp:st.sp ~accu:st.accu 
         ~trapsp:st.trapsp ~eargs:st.extra_args)
   in
   (* execute instruction *)

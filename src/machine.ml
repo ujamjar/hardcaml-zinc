@@ -6,6 +6,19 @@ type machine_register =
 
 type cache = [ `stack | `program | `mem ]
 
+type memory_mapping = 
+  {
+    memory : Repr.memory;
+    code_address : int;
+    code_size : int;
+    atoms_address : int;
+    globals_address : int;
+    c_heap_address : int;
+    c_heap_size : int;
+    heap_address : int;
+    stack_address : int;
+  }
+
 type state = 
   {
     (* zinc registers *)

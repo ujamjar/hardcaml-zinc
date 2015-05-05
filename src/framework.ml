@@ -11,20 +11,9 @@ module Z = Interface.Gen(B)(Zinc.I)(Zinc.O)
 (*module Z = HardCamlLlvmsim.Sim.Gen(B)(Zinc.I)(Zinc.O)*)
 module If = Cyclesim.Sim_obj_if.Make(B)
 
-let c_heap_size_bytes = 32*1024 (* 32k c-heap *)
+open Machine
 
-type memory_mapping = 
-  {
-    memory : Repr.memory;
-    code_address : int;
-    code_size : int;
-    atoms_address : int;
-    globals_address : int;
-    c_heap_address : int;
-    c_heap_size : int;
-    heap_address : int;
-    stack_address : int;
-  }
+let c_heap_size_bytes = 2*1024*1024 (* 2Mb c-heap *)
 
 let init_memory bc memory_size_words = 
   let open Int64 in
@@ -79,86 +68,6 @@ type cfg =
     mem_trace : bool;
   }
 
-module M = Mlvalues.Make(Ops.Int64) 
-
-let header memory v = memory.{((Int64.to_int v) / 8)-1} 
-let field memory v i = memory.{((Int64.to_int v) / 8)+i} 
-
-let get_string memory v = 
-  let open Int64 in
-  let size = to_int @@ M.size (header memory v) in
-  let pad = to_int @@ shift_right_logical (field memory v (size-1)) 56 in
-  String.init ((size*8)-pad-1) 
-    (fun i ->
-      Char.chr (to_int @@ 
-        logand 0xFFL @@
-        shift_right_logical 
-          (field memory v (i/8)) 
-          ((i mod 8)*8)))
-
-let trace_val m v = 
-  let open M in
-  let open Printf in
-  let open Int64 in
-  printf "0x%Lx" v;
-  let bytecode_address, bytecode_size = of_int m.code_address, of_int m.code_size in
-  let codeofs v = div (sub v bytecode_address) 4L in
-  let in_program v = 
-    (rem v 4L = 0L) && v >= bytecode_address && v < (add bytecode_address bytecode_size)
-  in
-  let header, field = header m.memory, field m.memory in
-  let printstr str = 
-    String.init (min 31 (String.length str)) (fun i ->
-      let c = String.get str i in
-      if c >= ' ' && c <= '~' then c else '?')
-  in
-  if is_int v = 1L then printf "=long%Li" (shift_right v 1)
-  else if in_program v then printf "=code@%Li" (codeofs v)
-  else if is_block v = 1L then begin
-    let h = header v in
-    let tag, size = tag h, to_int (size h) in
-    let dump_fields () = 
-      if size <> 0 then begin
-        printf "=(";
-        for i=0 to min (size-1) 20 do
-          if i<>0 then printf ", ";
-          printf "0x%Lx" (field v i);
-        done;
-        printf ")"
-      end
-    in 
-    if tag = closure_tag then begin
-      printf "=closure[s%i,cod%Li]" size (codeofs (field v 0));
-      dump_fields()
-    end else if tag = string_tag then begin
-      let str = get_string m.memory v in
-      printf "=string[s%iL%i]='%s'" size (String.length str) (printstr str);
-      dump_fields()
-    end else if tag = double_tag then begin
-      printf "=float[s%i]=%s" size (string_of_float (Int64.float_of_bits (field v 0)));
-      dump_fields()
-    end else if tag = custom_tag then begin
-      printf "=custom[s%i]" size;
-      dump_fields()
-    end else
-      printf "=block<T%Li/s%i>" tag size
-  end else printf "=unknown"
-
-let trace ~m ~env ~sp ~accu ~trapsp ~eargs = 
-  let trace_val = trace_val m in
-  let sp = Int64.to_int sp in
-  let trapsp = Int64.to_int trapsp in
-  let eargs = Int64.to_int eargs in
-  let stack_size = (m.stack_address - sp) / 8 in
-  let trap_stack_size = (m.stack_address - trapsp) / 8 in
-  printf "env="; trace_val env; printf "\n";
-  printf "accu="; trace_val accu; printf "\n";
-  (*printf " sp=0x%x @%i:\n" sp stack_size;*)
-  printf " sp=0x%x @%i: trapsp=0x%x @%i extra_args=%i\n" sp stack_size trapsp trap_stack_size eargs;
-  for i=0 to min (stack_size-1) 15 do
-    printf "[%i] " (stack_size-i); trace_val m.memory.{ (sp/8)+i }; printf "\n"
-  done
-    
 let make cfg exe = 
 
   let mem_size_words = 1024*1024 in
@@ -208,7 +117,7 @@ let make cfg exe =
   let memory = init_memory exe mem_size_words in
 
   let trace () = 
-    trace ~m:memory ~env:o.env#i64 ~sp:o.sp#i64 ~accu:o.sp#i64 ~trapsp:0L ~eargs:0L in
+    Trace.machine ~m:memory ~env:o.env#i64 ~sp:o.sp#i64 ~accu:o.sp#i64 ~trapsp:0L ~eargs:0L in
 
   S.reset sim;
   i.bytecode_start_address#i memory.code_address;

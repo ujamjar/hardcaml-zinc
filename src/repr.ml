@@ -112,9 +112,9 @@ let repr64_of_data64 d p =
       let tag = M.tag hdr in
       let size = M.size hdr in
       if tag < M.no_scan_tag then
-        `b(p, Array.init (Int64.to_int size) (fun i -> f d.{p' + i}))
+        `b(hdr, Array.init (Int64.to_int size) (fun i -> f d.{p' + i}))
       else
-        `f(p, Array.init (Int64.to_int size) (fun i -> d.{p' + i}))
+        `f(hdr, Array.init (Int64.to_int size) (fun i -> d.{p' + i}))
     else
       `i p
   in

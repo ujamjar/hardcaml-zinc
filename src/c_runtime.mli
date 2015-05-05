@@ -13,7 +13,7 @@ type c_call =
 val get_repr : 'a -> int -> int64 array
 val get_obj : state -> int64 -> 'a
 
-val alloc_block : state -> int64 -> int64 -> int64 -> int64
+val alloc_block : st:state -> size:int64 -> colour:int64 -> tag:int64 -> int64
 val alloc_block_from : state -> 'a -> int64 
 
 val init : int -> int -> unit

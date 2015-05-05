@@ -1,11 +1,16 @@
 
 (* say hello world *)
-let () = output_string stdout "Hey! hello world from hardcamlzinc!\n"
+let () = output_string stderr "Hey! hello world from hardcamlzinc!\n"
 
 (*let a = 1
 let b = 2
 let c = a + b
 *)
+
+type foo = X of int | Y of (int * int) | Z
+
+let x = List.fold_left (fun a -> function X i -> a+i | Y(i,j) -> a+i+j | Z -> a+1) 
+  0 [ X 1; Y(1,2); Z; Z ]
 
 (* switch instruction *)
 type t = A | B | C
@@ -14,19 +19,19 @@ let a = match A with A -> 0 | B -> 1 | C -> 2
 (* exceptions *)
 let () = 
   try
-    output_string stdout "not raised\n"
-  with _ -> output_string stdout "ooops\n"
+    output_string stderr "not raised\n"
+  with _ -> output_string stderr "ooops\n"
 let () = 
   try raise Not_found
-  with Not_found -> output_string stdout "caught exn\n"
+  with Not_found -> output_string stderr "caught exn\n"
 
 (* env vars *)
 let x = Sys.getenv "PATH"
-let () = print_endline x
+let () = prerr_endline x
 
 (* args *)
-let () = print_endline Sys.argv.(0)
-let () = try print_endline Sys.argv.(1) with _ -> output_string stdout "no arg\n"
+let () = prerr_endline Sys.argv.(0)
+let () = try prerr_endline Sys.argv.(1) with _ -> output_string stderr "no arg\n"
 
 (* basic file I/O *)
 let f = open_in "tmp.in"
@@ -38,7 +43,7 @@ let () = output_string g ("copied: " ^ s)
 let () = close_in f
 let () = close_out g
 
-let () = output_string stdout "el finito!\n"
+let () = output_string stderr "el finito!\n"
 
 (* string ops *)
 (*
