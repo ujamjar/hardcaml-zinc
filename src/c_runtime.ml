@@ -50,28 +50,37 @@ let alloc_block ~st ~size ~colour ~tag =
   st.memory.{p} <- Int64.(make_header size colour tag);
   Int64.of_int ((p+1)*8)
 
-let get_repr : 'a -> int -> int64 array = fun a ofs ->
-  Repr.data64_of_repr64 (Repr.repr64_of_obj (Obj.repr a)) ofs 
+exception Get_repr
+exception Get_obj
+exception Alloc_block_from
 
-let get_obj : state -> int64 -> 'a = fun st p ->
-  Obj.magic (Repr.obj_of_repr64 (Repr.repr64_of_data64 st.memory p))
+let get_repr : ?closure:bool -> 'a -> int -> int64 array = fun ?(closure=true) a ofs ->
+  try Repr.data64_of_repr64 (Repr.repr64_of_obj ~closure (Obj.repr a)) ofs 
+  with _ -> raise Get_repr
+
+let get_obj : ?closure:bool -> state -> int64 -> 'a = fun ?(closure=true) st p ->
+  try Obj.magic (Repr.obj_of_repr64 (Repr.repr64_of_data64 ~closure st.memory p))
+  with _ -> raise Get_obj 
 
 let alloc_block_from : state -> 'a -> int64 = fun st a -> 
-  let p = !c_heap_address in
-  let a = get_repr a p in
-  let size = Array.length a in
-  if size = 1 then a.(0) (* must be a scalar value *)
-  else begin
-    bump size;
-    for i=0 to size - 1 do
-      st.memory.{i+p} <- a.(i)
-    done;
-    Int64.of_int ((p+1)*8)
-  end
+  try
+    let p = !c_heap_address in
+    let a = get_repr a p in
+    let size = Array.length a in
+    if size = 1 then a.(0) (* must be a scalar value *)
+    else begin
+      bump size;
+      for i=0 to size - 1 do
+        st.memory.{i+p} <- a.(i)
+      done;
+      Int64.of_int ((p+1)*8)
+    end
+  with _ -> raise Alloc_block_from 
 
 let header st v = st.memory.{((to_int v) / 8)-1} 
 let field st v i = st.memory.{((to_int v) / 8)+i} 
 let set_field st v i d = st.memory.{((to_int v) / 8)+i} <- d
+let set_header st v d = set_field st v (-1) d
 let modify = set_field
 
 let c1_unit = C1 (fun _ _ -> `ok val_unit)
@@ -83,6 +92,7 @@ let c5_unit = C5 (fun _ _ _ _ _ _ -> `ok val_unit)
 let c1_id = C1 (fun _ a -> `ok a)
 
 let c1_int i = C1 (fun _ _ -> `ok (val_int i))
+let c2_int i = C2 (fun _ _ _ -> `ok (val_int i))
 let c1_true = C1 (fun _ _ -> `ok val_true)
 let c1_false = C1 (fun _ _ -> `ok val_false)
 
@@ -174,7 +184,7 @@ let caml_update_dummy =
     assert (size hdummy = size hnewval);
     assert (tag newval < no_scan_tag || tag newval = double_array_tag);
 
-    set_field st dummy (-1) (make_header (size hdummy) (colour hdummy) (tag hnewval));
+    set_header st dummy (make_header (size hdummy) (colour hdummy) (tag hnewval));
     for i=0 to to_int (size hdummy) - 1 do
       modify st dummy i (field st newval i)
     done;
@@ -584,6 +594,12 @@ let caml_obj_tag =
     (* else if obj < st.heap then `ok (val_int 1001L) *)
     else `ok (val_int (tag (header st obj))))
 
+let caml_obj_set_tag = 
+  C2 (fun st arg tag ->
+    let hdr = header st arg in
+    set_header st arg ((hdr &: (~: 255L)) |: int_val tag);
+    `ok val_unit)
+
 let caml_compare_val st a b = (* need better implementation *)
   let (a : Obj.t), (b : Obj.t) = get_obj st a, get_obj st b in
   Pervasives.compare a b
@@ -628,6 +644,98 @@ let caml_format_int =
   C2 (fun st fmt arg ->
     let s = format_int (get_obj st fmt : string) (get_obj st arg : int) in
     `ok (alloc_block_from st s))
+
+let update_fields : state -> int64 -> 'a -> unit = fun st p o ->
+  let o = Obj.repr o in
+  for i=0 to Obj.size o - 1 do
+    set_field st p i (Repr.int64_of_obj (Obj.field o i))
+  done
+
+(*
+ 
+  This is input to the c-call and some fields are updated.
+  note; we cannot convert functions across the c-call boundary, but refill_buff
+  is not used anyway.
+
+      type lexbuf =
+        { refill_buff : lexbuf -> unit;     0 not used 
+          mutable lex_buffer : bytes;       1 fields modified
+          mutable lex_buffer_len : int;     2 read only
+          mutable lex_abs_pos : int;        3 not used
+          mutable lex_start_pos : int;      4 modified
+          mutable lex_curr_pos : int;       5 modified
+          mutable lex_last_pos : int;       6 modified
+          mutable lex_last_action : int;    7 modified
+          mutable lex_eof_reached : bool;   8 modified
+          mutable lex_mem : int array;      9 fields modified
+          mutable lex_start_p : position;  10 not used
+          mutable lex_curr_p : position;   11 not used
+        }
+*)
+external lex_c_engine : Lexing.lex_tables -> int -> Lexing.lexbuf -> int = "caml_lex_engine"
+external new_lex_c_engine : Lexing.lex_tables -> int -> Lexing.lexbuf -> int = "caml_new_lex_engine"
+let caml_lex_engine' lex_engine = 
+  C3 (fun st tab start buf ->
+    let tab' = (get_obj st tab : Lexing.lex_tables) in (* might be worth cacheing this? *)
+    let start = to_int (int_val start) in
+    let buf' = (get_obj ~closure:false st buf : Lexing.lexbuf) in
+    let res = lex_engine tab' start buf' in
+
+    update_fields st (field st buf 1) buf'.Lexing.lex_buffer;
+    set_field st buf 4 (val_int (of_int buf'.Lexing.lex_start_pos));
+    set_field st buf 5 (val_int (of_int buf'.Lexing.lex_curr_pos));
+    set_field st buf 6 (val_int (of_int buf'.Lexing.lex_last_pos));
+    set_field st buf 7 (val_int (of_int buf'.Lexing.lex_last_action));
+    set_field st buf 8 (if buf'.Lexing.lex_eof_reached then val_true else val_false);
+    update_fields st (field st buf 9) buf'.Lexing.lex_mem;
+
+    `ok (val_int (of_int res)))
+
+let caml_lex_engine = caml_lex_engine' lex_c_engine
+let caml_new_lex_engine = caml_lex_engine' new_lex_c_engine
+
+type position = Lexing.position
+type parser_env =
+  { mutable s_stack : int array;               (*   0 fields modified *)
+    mutable v_stack : Obj.t array;             (*   1 fields modified *)
+    mutable symb_start_stack : position array; (*   2 fields modified *)
+    mutable symb_end_stack : position array;   (*   3 fields modified *)
+    mutable stacksize : int;                   (*   4 read only *)
+    mutable stackbase : int;                   (*   5 read only *)
+    mutable curr_char : int;                   (*   6 modified  *)
+    mutable lval : Obj.t;                      (*   7 modified - xxx *)
+    mutable symb_start : position;             (*   8 read only *)
+    mutable symb_end : position;               (*   9 read only *)
+    mutable asp : int;                         (*  10 modified *)
+    mutable rule_len : int;                    (*  11 modified *)
+    mutable rule_number : int;                 (*  12 modified *)
+    mutable sp : int;                          (*  13 modified *)
+    mutable state : int;                       (*  14 modified *)
+    mutable errflag : int }                    (*  15 modified *)
+
+external parse_engine :
+    Parsing.parse_tables -> parser_env -> int -> Obj.t -> int
+    = "caml_parse_engine"
+let caml_parse_engine = 
+  C4 (fun st tab env inp obj ->
+    let tab' = (get_obj ~closure:false st tab : Parsing.parse_tables) in
+    let env' = (get_obj st env : parser_env) in
+    let inp' = (get_obj st inp : int) in
+    let obj' = (get_obj st obj : Obj.t) in (* not modified *)
+    let res = parse_engine tab' env' inp' obj' in
+    update_fields st (field st env 0) env'.s_stack;
+    update_fields st (field st env 1) env'.v_stack;
+    update_fields st (field st env 2) env'.symb_start_stack;
+    update_fields st (field st env 3) env'.symb_end_stack;
+    set_field st env 6 (val_int (of_int env'.curr_char));
+    set_field st env 7 (alloc_block_from st env'.lval); (* I think this is code... *)
+    set_field st env 10 (val_int (of_int env'.asp));
+    set_field st env 11 (val_int (of_int env'.rule_len));
+    set_field st env 12 (val_int (of_int env'.rule_number));
+    set_field st env 13 (val_int (of_int env'.sp));
+    set_field st env 14 (val_int (of_int env'.state));
+    set_field st env 15 (val_int (of_int env'.errflag));
+    `ok (val_int (of_int res)))
 
 module type Int = sig
   type t
@@ -786,6 +894,7 @@ let c_calls = [
   "caml_obj_block", caml_obj_block;
   "caml_obj_dup", caml_obj_dup;
   "caml_obj_tag", caml_obj_tag;
+  "caml_obj_set_tag", caml_obj_set_tag;
   "caml_compare", C2 caml_compare;
   "caml_equal", C2 caml_equal;
   "caml_notequal", C2 caml_notequal;
@@ -799,6 +908,10 @@ let c_calls = [
   "caml_ensure_stack_capacity", c1_unit;
   "caml_dynlink_get_current_libs", caml_dynlink_get_current_libs;
   "caml_format_int", caml_format_int;
+  "caml_install_signal_handler", c2_int 0L;
+  "caml_lex_engine", caml_lex_engine;
+  "caml_new_lex_engine", caml_new_lex_engine;
+  "caml_parse_engine", caml_parse_engine;
 ] @ Nativeint_c_calls.c_calls
   @ Int64_c_calls.c_calls
   @ Int32_c_calls.c_calls

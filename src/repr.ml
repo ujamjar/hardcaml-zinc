@@ -16,12 +16,13 @@ let int64_of_obj o =
   let valhi = Int64.of_int (Obj.magic o : int) in
   Int64.(logor (shift_left valhi 1) bitlo)
 
-let rec repr64_of_obj o =
+let rec repr64_of_obj ?(closure=true) o =
   if Obj.is_block o then
     let tag,size = Obj.tag o, Obj.size o in
-    if tag < Obj.no_scan_tag then
+    if not closure && tag = Obj.closure_tag then `i M.val_unit
+    else if tag < Obj.no_scan_tag then
       `b(M.make_header (Int64.of_int size) M.white (Int64.of_int tag), 
-          Array.(init size (fun i -> repr64_of_obj (Obj.field o i))))
+          Array.(init size (fun i -> repr64_of_obj ~closure (Obj.field o i))))
     else
       `f(M.make_header (Int64.of_int size) M.white (Int64.of_int tag), 
         Array.(init size (fun i -> int64_of_obj (Obj.field o i))))
@@ -104,14 +105,15 @@ let data64_of_repr64 data base_word_offset =
   assert (size = !pos);
   arr
 
-let repr64_of_data64 d p =
+let repr64_of_data64 ?(closure=true) d p =
   let rec f p = 
     if M.is_block p = 1L then
       let p' = Int64.to_int p / 8 in
       let hdr = d.{p'-1} in
       let tag = M.tag hdr in
       let size = M.size hdr in
-      if tag < M.no_scan_tag then
+      if not closure && tag = M.closure_tag then `i M.val_unit
+      else if tag < M.no_scan_tag then
         `b(hdr, Array.init (Int64.to_int size) (fun i -> f d.{p' + i}))
       else
         `f(hdr, Array.init (Int64.to_int size) (fun i -> d.{p' + i}))
