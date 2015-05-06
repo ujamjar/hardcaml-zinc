@@ -20,9 +20,6 @@ module type State = sig
   type st
   include Ops.S 
 
-  (* initial state *)
-
-  val initial : unit -> st
 
   (* machine registers *)
 
@@ -53,22 +50,6 @@ end
 module State_eval = struct
   
   type st = Machine.state 
-
-  let initial () = 
-    {
-      accu = 1L;
-      env = 0L;
-      pc = 0L;
-      sp = 0L;
-      extra_args = 0L;
-      trapsp = 0L;
-      global_data = 0L;
-      atom_table = 0L;
-      alloc_base = 0L;
-      stack_high = 0L;
-      memory = Bigarray.(Array1.create int64 c_layout 0);
-      exe = Load.empty;
-    }
 
   let get_reg st r = 
     match r with
@@ -166,12 +147,6 @@ module State_poly = struct
       cmd : cmd list;
     }
   
-  let initial () = 
-    {
-      id = 0;
-      cmd = [];
-    }
-
   let get_reg st r = 
     let x = Get_reg(st.id,r) in 
     (Val st.id), { id=st.id+1; cmd=x::st.cmd }
@@ -275,7 +250,6 @@ module type Monad = sig
   val for_up : S.t -> S.t -> (S.t -> unit t) -> unit t
   val for_dn : S.t -> S.t -> (S.t -> unit t) -> unit t
 
-  val run : 'a t -> 'a * S.st
   val step : S.st -> 'a t -> 'a * S.st
 
   val trace : bool
@@ -305,8 +279,6 @@ module Monad(T : sig val trace : bool end)(S : State) = struct
       f x s
 
   let return a = fun s -> (a, s)
-
-  let run m = m (S.initial ())
 
   let step st m = m st
 

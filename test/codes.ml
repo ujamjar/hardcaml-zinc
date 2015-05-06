@@ -4,8 +4,8 @@ open HardCamlZinc
 
 let mk_exe code = { Load.empty with Load.code = Instr.to_array code }
 
-let run code = Framework.make
-  Framework.{ waves=true; instr_trace=true; state_trace=true; mem_trace=true }
+let run code = Framework.Testbench.make
+  Framework.Testbench.{ waves=true; instr_trace=true; state_trace=true; mem_trace=true }
   (mk_exe code)
 
 let () = 

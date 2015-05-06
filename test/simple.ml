@@ -43,6 +43,13 @@ let () = output_string g ("copied: " ^ s)
 let () = close_in f
 let () = close_out g
 
+(* closure stuff *)
+
+let n = 11
+let rec f i = 1 + if i<0 then n else g (i-1)
+and g i = f (i-1) + f i
+let n = prerr_endline (string_of_int (f 3))
+
 let () = output_string stderr "el finito!\n"
 
 (* string ops *)

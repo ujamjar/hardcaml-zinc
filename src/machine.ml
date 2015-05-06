@@ -8,7 +8,6 @@ type cache = [ `stack | `program | `mem ]
 
 type memory_mapping = 
   {
-    memory : Repr.memory;
     code_address : int;
     code_size : int;
     atoms_address : int;
@@ -37,9 +36,11 @@ type state =
     memory : Repr.memory;
     (* executable *)
     exe : Load.bytecode_exe;
+    mapping : memory_mapping;
   }
 
 let empty = 
+  let memory = Bigarray.(Array1.create int64 c_layout 0) in
   {
     accu = 0L;
     env = 0L;
@@ -51,8 +52,19 @@ let empty =
     atom_table = 0L;
     alloc_base = 0L;
     stack_high = 0L;
-    memory = Bigarray.(Array1.create int64 c_layout 0);
+    memory = memory;
     exe = Load.empty;
+    mapping = 
+      {
+        code_address = 0;
+        code_size = 0;
+        atoms_address = 0;
+        globals_address = 0;
+        c_heap_address = 0;
+        c_heap_size = 0;
+        heap_address = 0;
+        stack_address = 0;
+      };
   }
 
 let string_of_mach_reg = function

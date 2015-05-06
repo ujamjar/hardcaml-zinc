@@ -8,7 +8,6 @@ type cache = [ `stack | `program | `mem ]
 
 type memory_mapping = 
   {
-    memory : Repr.memory;
     code_address : int;
     code_size : int;
     atoms_address : int;
@@ -37,6 +36,7 @@ type state =
     memory : Repr.memory;
     (* executable *)
     exe : Load.bytecode_exe;
+    mapping : memory_mapping;
   }
 
 val empty : state

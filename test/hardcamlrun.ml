@@ -36,12 +36,12 @@ let () =
 
 let _ = 
   let cfg = 
-    Framework.{
+    Framework.Testbench.{
       waves = !waves;
       instr_trace = !instr_trace;
       state_trace = !state_trace;
       mem_trace = !mem_trace;
     }
   in
-  Framework.make cfg bytecode
+  Framework.Testbench.make cfg bytecode
 

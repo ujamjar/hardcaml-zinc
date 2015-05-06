@@ -20,110 +20,155 @@ let get_string memory v =
 
 let showfields = ref false
 
-let root file memory v = 
+let root ?(chan=stdout) st v = 
   let open Int64 in
   let open Ops.Int64 in
+  let in_program v = 
+    let v = to_int v in
+    v >= st.mapping.code_address && v <= (st.mapping.code_address + st.mapping.code_size)
+  in
   let rec f pad v = 
-    let get i = memory.{ to_int i / 8 } in
-    if M.is_int v = 1L then fprintf file "%si%Li\n" pad (M.int_val v)
+    let get i = st.memory.{ to_int i / 8 } in
+    if M.is_int v = 1L then fprintf chan "%si%Li\n" pad (M.int_val v)
+    else if in_program v then
+      fprintf chan "%sc%Li\n" pad (srl (v -: of_int st.mapping.code_address) 2L)
     else begin
       let npad = " " ^ pad in
       let hdr = get (v -: 8L) in
       let tag = M.tag hdr in
       let size = M.size hdr in
-      fprintf file "%s[t%Li s%Li] p%.16Lx\n" pad tag size v;
+      fprintf chan "%s[t%Li s%Li] p%.16Lx\n" pad tag size v;
       if tag = M.string_tag then
-        fprintf file "%ss'%s'\n" pad (get_string memory v)
+        fprintf chan "%ss'%s'\n" pad (get_string st.memory v)
       else if tag < M.no_scan_tag then
         for i=0 to to_int size - 1 do
           f npad (get (v +: (of_int (i*8))))
         done
       else
         for i=0 to to_int size - 1 do
-          fprintf file "%sd%.16Lx\n" npad (get (v +: (of_int (i*8))))
+          fprintf chan "%sd%.16Lx\n" npad (get (v +: (of_int (i*8))))
         done
     end
   in
   f "" v
 
-let value m sp v = 
+let value ?(chan=stdout) st v = 
   let open M in
   let open Printf in
   let open Int64 in
+  let sp = Int64.to_int st.sp in
   (if !showfields then
-    printf "0x%Lx" v
+    fprintf chan "0x%Lx" v
   else
-    printf "%c" (if is_int v=1L then 'i' else 'p'));
-  let bytecode_address, bytecode_size = of_int m.code_address, of_int m.code_size in
+    fprintf chan "%c" (if is_int v=1L then 'i' else 'p'));
+  let bytecode_address, bytecode_size = of_int st.mapping.code_address, of_int st.mapping.code_size in
   let codeofs v = div (sub v bytecode_address) 4L in
   let in_program v = 
     (rem v 4L = 0L) && v >= bytecode_address && v < (add bytecode_address bytecode_size)
   in
   let in_stack sp v = 
     let v = to_int v in
-    v >= sp && v <= m.stack_address
+    v >= sp && v <= st.mapping.stack_address
   in
-  let header, field = header m.memory, field m.memory in
+  let header, field = header st.memory, field st.memory in
   let printstr str = 
     String.init (min 31 (String.length str)) (fun i ->
       let c = String.get str i in
       if c >= ' ' && c <= '~' then c else '?')
   in
-  if is_int v = 1L then printf "=long%Li" (shift_right v 1)
-  else if in_program v then printf "=code@%Li" (codeofs v)
-  else if in_stack sp v then printf "=stack_%i" ((m.stack_address - to_int v) / 8)
+  if is_int v = 1L then fprintf chan "=long%Li" (shift_right v 1)
+  else if in_program v then fprintf chan "=code@%Li" (codeofs v)
+  else if in_stack sp v then fprintf chan "=stack_%i" ((st.mapping.stack_address - to_int v) / 8)
   else if is_block v = 1L then begin
     let h = header v in
     let tag, size = tag h, to_int (size h) in
     let dump_fields () = 
       if size <> 0 && !showfields then begin
-        printf "=(";
+        fprintf chan "=(";
         for i=0 to min (size-1) 20 do
-          if i<>0 then printf ", ";
-          printf "0x%Lx" (field v i);
+          if i<>0 then fprintf chan ", ";
+          fprintf chan "0x%Lx" (field v i);
         done;
-        printf ")"
+        fprintf chan ")"
       end
     in 
     if tag = closure_tag then begin
-      printf "=closure[s%i,cod%Li]" size (codeofs (field v 0));
+      fprintf chan "=closure[s%i,cod%Li]" size (codeofs (field v 0));
       dump_fields()
     end else if tag = string_tag then begin
-      let str = get_string m.memory v in
-      printf "=string[s%iL%i]'%s'" size (String.length str) (printstr str);
+      let str = get_string st.memory v in
+      fprintf chan "=string[s%iL%i]'%s'" size (String.length str) (printstr str);
       dump_fields()
     end else if tag = double_tag then begin
-      printf "=float[s%i]=%g" size (Int64.float_of_bits (field v 0));
+      fprintf chan "=float[s%i]=%g" size (Int64.float_of_bits (field v 0));
       dump_fields()
     end else if tag = double_array_tag then begin
-      printf "=floatarray[s%i]" size;
+      fprintf chan "=floatarray[s%i]" size;
       dump_fields()
     end else if tag = custom_tag then begin
-      printf "=custom[s%i]" size;
+      fprintf chan "=custom[s%i]" size;
       dump_fields()
     end else if tag = abstract_tag then begin
-      printf "=abstract[s%i]" size;
+      fprintf chan "=abstract[s%i]" size;
       dump_fields()
     end else
-      printf "=block<T%Li/s%i>" tag size
-  end else printf "=unknown"
+      fprintf chan "=block<T%Li/s%i>" tag size
+  end else fprintf chan "=unknown"
 
-let machine ~m ~env ~sp ~accu ~trapsp ~eargs = 
-  let trace_val = value m in
-  let sp = Int64.to_int sp in
-  let trapsp = Int64.to_int trapsp in
-  let eargs = Int64.to_int eargs in
-  let stack_size = (m.stack_address - sp) / 8 in
-  let trap_stack_size = (m.stack_address - trapsp) / 8 in
-  printf "env="; trace_val sp env; printf "\n";
-  printf "accu="; trace_val sp accu; printf "\n";
+let machine ?(chan=stdout) st =
+  let sp = Int64.to_int st.sp in
+  let trapsp = Int64.to_int st.trapsp in
+  let eargs = Int64.to_int st.extra_args in
+  let stack_size = (st.mapping.stack_address - sp) / 8 in
+  let trap_stack_size = (st.mapping.stack_address - trapsp) / 8 in
+  fprintf chan "env="; value st st.env; fprintf chan "\n";
+  fprintf chan "accu="; value st st.accu; fprintf chan "\n";
   (if !showfields then 
-    printf " sp=0x%x @%i: trapsp=0x%x @%i extra_args=%i\n" 
+    fprintf chan " sp=0x%x @%i: trapsp=0x%x @%i extra_args=%i\n" 
       sp stack_size trapsp trap_stack_size eargs
   else
-    printf " sp=%i: trapsp=%i extra_args=%i\n" stack_size trap_stack_size eargs);
+    fprintf chan " sp=%i: trapsp=%i extra_args=%i\n" stack_size trap_stack_size eargs);
   for i=0 to min (stack_size-1) 15 do
-    printf "[%i] " (stack_size-i); trace_val sp m.memory.{ (sp/8)+i }; printf "\n"
+    fprintf chan "[%i] " (stack_size-i); value st st.memory.{ (sp/8)+i }; fprintf chan "\n"
   done
     
+let get_instr memory pc = 
+  let instr = memory.{pc / 2} in
+  Ops.Int64.(sra (if pc mod 2 = 0 then sll instr 32L else instr) 32L) 
+
+let instr ?(chan=stdout) st = 
+  let open Instr in
+  let pc = Int64.to_int st.pc / 4 in
+  let instr = get_instr st.memory pc in
+  let instr = Enum.to_enum<Instr.opcodes> (Int64.to_int instr) in
+  let get_arg n = get_instr st.memory (pc + 1 + n) in
+  fprintf chan "%6i  %s" pc (Show.show<Instr.opcodes> instr);
+  match instr with
+  | PUSHACC | ACC | POP | ASSIGN
+  | PUSHENVACC | ENVACC | PUSH_RETADDR | APPLY
+  | APPTERM1 | APPTERM2 | APPTERM3 | RETURN
+  | GRAB | PUSHGETGLOBAL | GETGLOBAL | SETGLOBAL
+  | PUSHATOM | ATOM | MAKEBLOCK1 | MAKEBLOCK2
+  | MAKEBLOCK3 | MAKEFLOATBLOCK
+  | GETFIELD | SETFIELD | GETFLOATFIELD | SETFLOATFIELD
+  | BRANCH | BRANCHIF | BRANCHIFNOT | PUSHTRAP
+  | CONSTINT | PUSHCONSTINT | OFFSETINT | OFFSETREF
+  | OFFSETCLOSURE | PUSHOFFSETCLOSURE ->
+    fprintf chan " %Ld\n" (get_arg 0)
+
+  | APPTERM | CLOSURE | CLOSUREREC | PUSHGETGLOBALFIELD
+  | GETGLOBALFIELD | MAKEBLOCK
+  | BEQ | BNEQ | BLTINT | BLEINT | BGTINT | BGEINT
+  | BULTINT | BUGEINT ->
+    fprintf chan " %Ld, %Ld\n" (get_arg 0) (get_arg 1)
+
+  | C_CALLN | C_CALL1 | C_CALL2 | C_CALL3 | C_CALL4 | C_CALL5 -> begin
+    if instr = C_CALLN then begin
+      fprintf chan "%Ld, " (get_arg 0);
+      fprintf chan " %s\n" st.exe.Load.prim.(Int64.to_int (get_arg 1))
+    end else 
+      fprintf chan " %s\n" st.exe.Load.prim.(Int64.to_int (get_arg 0))
+  end
+  | _ ->
+    fprintf chan "\n"
 

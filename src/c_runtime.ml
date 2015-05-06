@@ -622,6 +622,13 @@ let caml_weak_create =
 let caml_dynlink_get_current_libs =
   C1 (fun st _ -> `ok st.atom_table)
 
+external format_int : string -> int -> string = "caml_format_int"
+
+let caml_format_int =
+  C2 (fun st fmt arg ->
+    let s = format_int (get_obj st fmt : string) (get_obj st arg : int) in
+    `ok (alloc_block_from st s))
+
 module type Int = sig
   type t
   val add : t -> t -> t
@@ -791,6 +798,7 @@ let c_calls = [
   "caml_weak_create", caml_weak_create;
   "caml_ensure_stack_capacity", c1_unit;
   "caml_dynlink_get_current_libs", caml_dynlink_get_current_libs;
+  "caml_format_int", caml_format_int;
 ] @ Nativeint_c_calls.c_calls
   @ Int64_c_calls.c_calls
   @ Int32_c_calls.c_calls
