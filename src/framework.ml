@@ -81,10 +81,7 @@ module Interp = struct
   open Machine
 
   module S = Interp.State_eval
-  module type M_eval = Interp.Monad 
-      with type S.t = int64
-      and type S.st = S.st
-  module M : M_eval = Interp.Monad(struct let trace = false end)(S) 
+  module M = Interp.Monad(struct let trace = false end)(S) 
   module O = Interp.Opcodes(M)
 
   let init ~prog ~argv ~memsize_kb = 

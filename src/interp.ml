@@ -1,16 +1,6 @@
 (*
- * TODO;
+ * abstract implementation of byterun/interp.c
  *
- *  - not_implemented; 
- *      getmethod, getpubmet, getdynmet
- *      stop, event, break
- *
- *  - not fully implemented
- *      pushtrap, poptrap, raise_notrace, reraise, raise_
- *      check_signals
- *      c_call
- *
- *  - need to indicate 'stop' to caller
  *)
 
 open Machine
@@ -169,8 +159,8 @@ module State_poly = struct
     let _, st_body = f (Val tmp_id) { id = st.id+1; cmd = [] } in (* eval the body *)
     { st_body with cmd = Iter(dirn, tmp_id, m, n, st_body.cmd) :: st.cmd }
 
-  let iter_up = iter true
-  let iter_dn = iter false
+  let iter_up st m n f = iter true st m n f
+  let iter_dn st m n f = iter false st m n f
 
   let dynmet st meths hi = failwith "DYNMET" (* XXX TODO *)
 
@@ -391,7 +381,10 @@ module Opcodes(M : Monad) = struct
   type returns = 
     [ `step
     | `stop
-    | `c_call of int64 * int64 ] (* nargs, prim *)
+    | `c_call of M.S.t * M.S.t ] (* nargs, prim *)
+
+  type arg = M.S.t
+  type instr = unit M.t
 
   (******************************************************************)
   (* utils *)
@@ -1398,7 +1391,7 @@ module Opcodes(M : Monad) = struct
 *)
   
   let c_call n = pop_arg >>= fun prim -> return (`c_call(n, prim))
-  let c_calln = pop_arg >>= fun prim -> return (`c_call(0L,prim))
+  let c_calln = pop_arg >>= fun prim -> return (`c_call(const 0,prim))
 
   (************************************************************)
   (* Integer constants *)
@@ -1840,16 +1833,4 @@ module Opcodes(M : Monad) = struct
     | Instr.RAISE_NOTRACE-> raise_notrace >> step
   
 end
-
-(*module type M_eval = Monad 
-    with type S.t = int64
-     and type S.st = State_eval.st
-module M : M_eval = Monad(State_eval) 
-module O = Opcodes(M)*)
-
-module type M_poly = Monad 
-    with type S.t = State_poly.t
-     and type S.st = State_poly.st
-module M' : M_poly = Monad(struct let trace=false end)(State_poly) 
-module O' = Opcodes(M')
 
