@@ -3,8 +3,10 @@ type machine_register =
   [ `accu | `env | `pc | `sp | `extra_args | `trapsp
   (* other state *)
   | `global_data | `atom_table | `alloc_base | `stack_high ]
+  deriving(Show, Enum, Bounded)
 
 type cache = [ `stack | `program | `mem ]
+  deriving(Show, Enum, Bounded)
 
 type memory_mapping = 
   {
@@ -42,4 +44,7 @@ type state =
 val empty : state
 val string_of_mach_reg : machine_register -> string
 val string_of_cache : cache -> string
+
+val num_machine_registers : int
+val num_cache_spaces : int
 

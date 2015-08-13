@@ -33,7 +33,30 @@ module type State = sig
 end
 
 module State_eval : State with type t = int64 and type st = Machine.state
-module State_poly : State
+
+type sp_cmd = 
+  | Get_reg of int * machine_register 
+  | Set_reg of machine_register * sp_t
+  | Get_mem of int * cache * sp_t
+  | Set_mem of cache * sp_t * sp_t
+  | Cond of sp_t * sp_cmd list * sp_cmd list
+  | Iter of bool * int * sp_t * sp_t * sp_cmd list
+and sp_t = 
+  | Op of string * sp_t * sp_t
+  | Val of int
+  | Const of int
+and sp_st = 
+  {
+    id : int;
+    cmd : sp_cmd list;
+  }
+
+module State_poly : sig
+  include State with type t = sp_t and type st = sp_st
+  val empty : st
+  val normalise : sp_cmd list -> sp_cmd list
+  val print : st -> unit
+end
 
 module type Monad = sig
   module S : State

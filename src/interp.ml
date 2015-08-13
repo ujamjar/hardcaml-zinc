@@ -118,25 +118,30 @@ module State_eval = struct
 
 end
 
+type sp_cmd = 
+  | Get_reg of int * machine_register 
+  | Set_reg of machine_register * sp_t
+  | Get_mem of int * cache * sp_t
+  | Set_mem of cache * sp_t * sp_t
+  | Cond of sp_t * sp_cmd list * sp_cmd list
+  | Iter of bool * int * sp_t * sp_t * sp_cmd list
+and sp_t = 
+  | Op of string * sp_t * sp_t
+  | Val of int
+  | Const of int
+and sp_st = 
+  {
+    id : int;
+    cmd : sp_cmd list;
+  }
+
 module State_poly = struct
 
-  type cmd = 
-    | Get_reg of int * machine_register 
-    | Set_reg of machine_register * t
-    | Get_mem of int * cache * t
-    | Set_mem of cache * t * t
-    | Cond of t * cmd list * cmd list
-    | Iter of bool * int * t * t * cmd list
-  and t = 
-    | Op of string * t * t
-    | Val of int
-    | Const of int
-  and st = 
-    {
-      id : int;
-      cmd : cmd list;
-    }
-  
+  type t = sp_t
+  type st = sp_st
+
+  let empty = { id=0; cmd=[] }
+    
   let get_reg st r = 
     let x = Get_reg(st.id,r) in 
     (Val st.id), { id=st.id+1; cmd=x::st.cmd }
@@ -200,6 +205,13 @@ module State_poly = struct
     | Val(i) -> "_" ^ string_of_int i
     | Const i -> string_of_int i
 
+  let rec normalise cmd = 
+    List.rev @@
+      List.map (function 
+        | Cond(c,t,f) -> Cond(c, normalise t, normalise f)
+        | Iter(a,b,c,d,e) -> Iter(a,b,c,d, normalise e)
+        | _ as x -> x) cmd
+
   let rec print lev st = 
     let open Printf in
     let pad = String.make lev ' ' in
@@ -221,9 +233,9 @@ module State_poly = struct
         print (lev+2) b;
         printf "%sdone\n" pad
       )
-      (List.rev st)
+      st
 
-  let print st = print 0 st.cmd
+  let print st = print 0 (normalise st.cmd)
 
 end
 

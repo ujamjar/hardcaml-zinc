@@ -3,8 +3,10 @@ type machine_register =
   [ `accu | `env | `pc | `sp | `extra_args | `trapsp
   (* other state *)
   | `global_data | `atom_table | `alloc_base | `stack_high ]
+  deriving(Show, Enum, Bounded)
 
 type cache = [ `stack | `program | `mem ]
+  deriving(Show, Enum, Bounded)
 
 type memory_mapping = 
   {
@@ -83,4 +85,14 @@ let string_of_cache = function
   | `stack -> "stack"
   | `program -> "program"
   | `mem -> "mem"
+
+let num_machine_registers = 
+  let min, max = Bounded.min_bound<machine_register>, Bounded.max_bound<machine_register> in
+  let min, max = Enum.from_enum<machine_register> min, Enum.from_enum<machine_register> max in
+  max-min+1
+
+let num_cache_spaces = 
+  let min, max = Bounded.min_bound<machine_register>, Bounded.max_bound<machine_register> in
+  let min, max = Enum.from_enum<machine_register> min, Enum.from_enum<machine_register> max in
+  max-min+1
 
