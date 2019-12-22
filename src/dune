@@ -1,4 +1,5 @@
 (library
   (name hardcaml_zinc)
-  (libraries hardcaml hardcaml_waveterm)
+  (libraries hardcaml compiler-libs hardcaml_waveterm)
+  (preprocess (pps ppx_jane ppx_deriving_hardcaml))
   )

@@ -1,5 +1,5 @@
 (* round robin arbiter *)
-open Hardcaml
+open Import
 
 type 'a prefix = ('a -> 'a -> 'a) -> 'a list -> 'a list
 
@@ -22,10 +22,6 @@ module Make (B : Comb.S) = struct
 end
 
 open Signal
-
-let clock = input "clock" 1
-
-let clear = input "clear" 1
 
 let reg_spec = Reg_spec.create () ~clock ~clear
 
