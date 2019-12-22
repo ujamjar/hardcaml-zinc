@@ -1,10 +1,11 @@
-type memory = (int64, Bigarray.int64_elt, Bigarray.c_layout) Bigarray.Array1.t 
+type memory = (int64, Bigarray.int64_elt, Bigarray.c_layout) Bigarray.Array1.t
 
 (** intermediate representation of ocaml memory values *)
-type repr64 = 
-  [ `f of int64 * int64 array 
-  | `b of int64 * repr64 array 
-  | `i of int64 ]
+type repr64 =
+  [ `f of int64 * int64 array
+  | `b of int64 * repr64 array
+  | `i of int64
+  ]
 
 (** bit pattern of an obj, including the low order hidden bit *)
 val int64_of_obj : Obj.t -> int64
@@ -21,4 +22,3 @@ val data64_of_repr64 : repr64 -> int -> int64 array
 
 (* repr64 of int64 array *)
 val repr64_of_data64 : ?closure:bool -> memory -> int64 -> repr64
-

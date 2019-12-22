@@ -1,0 +1,5 @@
+(library
+  (name hardcaml_zinc)
+  (libraries hardcaml compiler-libs hardcaml_waveterm.interactive)
+  (preprocess (pps ppx_jane ppx_deriving_hardcaml))
+  )
