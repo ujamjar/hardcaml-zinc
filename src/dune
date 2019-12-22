@@ -1,0 +1,4 @@
+(library
+  (name hardcaml_zinc)
+  (libraries hardcaml hardcaml_waveterm)
+  )
