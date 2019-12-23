@@ -1,6 +1,4 @@
 *~
 .*.swp
 _build/
-src/.merlin
-bin/.merlin
-test/.merlin
+.merlin

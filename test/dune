@@ -1,6 +1,0 @@
-(library
-  (name hardcaml_zinc_test)
-  (libraries compiler-libs.bytecomp hardcaml_zinc)
-  (preprocess (pps ppx_jane ppx_expect))
-  (inline_tests)
-)
