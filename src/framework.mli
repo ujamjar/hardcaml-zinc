@@ -32,14 +32,3 @@ module Interp : sig
         ; value : int64 -> unit
         ; root : int64 -> unit > >
 end
-
-module Testbench : sig
-  type cfg = {
-    waves : bool;
-    instr_trace : bool;
-    state_trace : bool;
-    mem_trace : bool;
-  }
-
-  val make : cfg -> Load.bytecode_exe -> unit
-end
