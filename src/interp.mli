@@ -320,5 +320,5 @@ module Opcodes (M : Monad) : sig
 
   val break : instr
 
-  val dispatch : Instr.opcodes -> returns M.t
+  val dispatch : Opcode.t -> returns M.t
 end

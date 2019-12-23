@@ -1685,154 +1685,155 @@ module Opcodes (M : Monad) = struct
 
   (************************************************************)
 
-  let dispatch = function
-    | Instr.ACC0 -> accn (const 0) >> step
-    | Instr.ACC1 -> accn (const 1) >> step
-    | Instr.ACC2 -> accn (const 2) >> step
-    | Instr.ACC3 -> accn (const 3) >> step
-    | Instr.ACC4 -> accn (const 4) >> step
-    | Instr.ACC5 -> accn (const 5) >> step
-    | Instr.ACC6 -> accn (const 6) >> step
-    | Instr.ACC7 -> accn (const 7) >> step
-    | Instr.ACC -> acc >> step
-    | Instr.PUSH -> push >> step
-    | Instr.PUSHACC0 -> pushaccn (const 0) >> step
-    | Instr.PUSHACC1 -> pushaccn (const 1) >> step
-    | Instr.PUSHACC2 -> pushaccn (const 2) >> step
-    | Instr.PUSHACC3 -> pushaccn (const 3) >> step
-    | Instr.PUSHACC4 -> pushaccn (const 4) >> step
-    | Instr.PUSHACC5 -> pushaccn (const 5) >> step
-    | Instr.PUSHACC6 -> pushaccn (const 6) >> step
-    | Instr.PUSHACC7 -> pushaccn (const 7) >> step
-    | Instr.PUSHACC -> pushacc >> step
-    | Instr.POP -> pop >> step
-    | Instr.ASSIGN -> assign >> step
-    | Instr.ENVACC1 -> envaccn (const 1) >> step
-    | Instr.ENVACC2 -> envaccn (const 2) >> step
-    | Instr.ENVACC3 -> envaccn (const 3) >> step
-    | Instr.ENVACC4 -> envaccn (const 4) >> step
-    | Instr.ENVACC -> envacc >> step
-    | Instr.PUSHENVACC1 -> pushenvaccn (const 1) >> step
-    | Instr.PUSHENVACC2 -> pushenvaccn (const 2) >> step
-    | Instr.PUSHENVACC3 -> pushenvaccn (const 3) >> step
-    | Instr.PUSHENVACC4 -> pushenvaccn (const 4) >> step
-    | Instr.PUSHENVACC -> pushenvacc >> step
-    | Instr.PUSH_RETADDR -> push_retaddr >> step
-    | Instr.APPLY -> apply >> step
-    | Instr.APPLY1 -> applyn 1 >> step
-    | Instr.APPLY2 -> applyn 2 >> step
-    | Instr.APPLY3 -> applyn 3 >> step
-    | Instr.APPTERM -> appterm >> step
-    | Instr.APPTERM1 -> apptermn 1 >> step
-    | Instr.APPTERM2 -> apptermn 2 >> step
-    | Instr.APPTERM3 -> apptermn 3 >> step
-    | Instr.RETURN -> return_ >> step
-    | Instr.RESTART -> restart >> step
-    | Instr.GRAB -> grab >> step
-    | Instr.CLOSURE -> closure >> step
-    | Instr.CLOSUREREC -> closurerec >> step
-    | Instr.OFFSETCLOSUREM2 -> offsetclosurem2 >> step
-    | Instr.OFFSETCLOSURE0 -> offsetclosure0 >> step
-    | Instr.OFFSETCLOSURE2 -> offsetclosure2 >> step
-    | Instr.OFFSETCLOSURE -> offsetclosure >> step
-    | Instr.PUSHOFFSETCLOSUREM2 -> pushoffsetclosurem2 >> step
-    | Instr.PUSHOFFSETCLOSURE0 -> pushoffsetclosure0 >> step
-    | Instr.PUSHOFFSETCLOSURE2 -> pushoffsetclosure2 >> step
-    | Instr.PUSHOFFSETCLOSURE -> pushoffsetclosure >> step
-    | Instr.GETGLOBAL -> getglobal >> step
-    | Instr.PUSHGETGLOBAL -> pushgetglobal >> step
-    | Instr.GETGLOBALFIELD -> getglobalfield >> step
-    | Instr.PUSHGETGLOBALFIELD -> pushgetglobalfield >> step
-    | Instr.SETGLOBAL -> setglobal >> step
-    | Instr.ATOM0 -> atom0 >> step
-    | Instr.ATOM -> atom >> step
-    | Instr.PUSHATOM0 -> pushatom0 >> step
-    | Instr.PUSHATOM -> pushatom >> step
-    | Instr.MAKEBLOCK -> makeblock >> step
-    | Instr.MAKEBLOCK1 -> makeblockn (const 1) >> step
-    | Instr.MAKEBLOCK2 -> makeblockn (const 2) >> step
-    | Instr.MAKEBLOCK3 -> makeblockn (const 3) >> step
-    | Instr.MAKEFLOATBLOCK -> makefloatblock >> step
-    | Instr.GETFIELD0 -> getfieldn (const 0) >> step
-    | Instr.GETFIELD1 -> getfieldn (const 1) >> step
-    | Instr.GETFIELD2 -> getfieldn (const 2) >> step
-    | Instr.GETFIELD3 -> getfieldn (const 3) >> step
-    | Instr.GETFIELD -> getfield >> step
-    | Instr.GETFLOATFIELD -> getfloatfield >> step
-    | Instr.SETFIELD0 -> setfieldn (const 0) >> step
-    | Instr.SETFIELD1 -> setfieldn (const 1) >> step
-    | Instr.SETFIELD2 -> setfieldn (const 2) >> step
-    | Instr.SETFIELD3 -> setfieldn (const 3) >> step
-    | Instr.SETFIELD -> setfield >> step
-    | Instr.SETFLOATFIELD -> setfloatfield >> step
-    | Instr.VECTLENGTH -> vectlength >> step
-    | Instr.GETVECTITEM -> getvectitem >> step
-    | Instr.SETVECTITEM -> setvectitem >> step
-    | Instr.GETSTRINGCHAR -> getstringchar >> step
-    | Instr.SETSTRINGCHAR -> setstringchar >> step
-    | Instr.BRANCH -> branch >> step
-    | Instr.BRANCHIF -> branchif >> step
-    | Instr.BRANCHIFNOT -> branchifnot >> step
-    | Instr.SWITCH -> switch >> step
-    | Instr.BOOLNOT -> boolnot >> step
-    | Instr.PUSHTRAP -> pushtrap >> step
-    | Instr.POPTRAP -> poptrap >> step
-    | Instr.RAISE -> raise_ >> step
-    | Instr.CHECK_SIGNALS -> check_signals >> step
+  let dispatch (x : Opcode.t) =
+    match x with
+    | ACC0 -> accn (const 0) >> step
+    | ACC1 -> accn (const 1) >> step
+    | ACC2 -> accn (const 2) >> step
+    | ACC3 -> accn (const 3) >> step
+    | ACC4 -> accn (const 4) >> step
+    | ACC5 -> accn (const 5) >> step
+    | ACC6 -> accn (const 6) >> step
+    | ACC7 -> accn (const 7) >> step
+    | ACC -> acc >> step
+    | PUSH -> push >> step
+    | PUSHACC0 -> pushaccn (const 0) >> step
+    | PUSHACC1 -> pushaccn (const 1) >> step
+    | PUSHACC2 -> pushaccn (const 2) >> step
+    | PUSHACC3 -> pushaccn (const 3) >> step
+    | PUSHACC4 -> pushaccn (const 4) >> step
+    | PUSHACC5 -> pushaccn (const 5) >> step
+    | PUSHACC6 -> pushaccn (const 6) >> step
+    | PUSHACC7 -> pushaccn (const 7) >> step
+    | PUSHACC -> pushacc >> step
+    | POP -> pop >> step
+    | ASSIGN -> assign >> step
+    | ENVACC1 -> envaccn (const 1) >> step
+    | ENVACC2 -> envaccn (const 2) >> step
+    | ENVACC3 -> envaccn (const 3) >> step
+    | ENVACC4 -> envaccn (const 4) >> step
+    | ENVACC -> envacc >> step
+    | PUSHENVACC1 -> pushenvaccn (const 1) >> step
+    | PUSHENVACC2 -> pushenvaccn (const 2) >> step
+    | PUSHENVACC3 -> pushenvaccn (const 3) >> step
+    | PUSHENVACC4 -> pushenvaccn (const 4) >> step
+    | PUSHENVACC -> pushenvacc >> step
+    | PUSH_RETADDR -> push_retaddr >> step
+    | APPLY -> apply >> step
+    | APPLY1 -> applyn 1 >> step
+    | APPLY2 -> applyn 2 >> step
+    | APPLY3 -> applyn 3 >> step
+    | APPTERM -> appterm >> step
+    | APPTERM1 -> apptermn 1 >> step
+    | APPTERM2 -> apptermn 2 >> step
+    | APPTERM3 -> apptermn 3 >> step
+    | RETURN -> return_ >> step
+    | RESTART -> restart >> step
+    | GRAB -> grab >> step
+    | CLOSURE -> closure >> step
+    | CLOSUREREC -> closurerec >> step
+    | OFFSETCLOSUREM2 -> offsetclosurem2 >> step
+    | OFFSETCLOSURE0 -> offsetclosure0 >> step
+    | OFFSETCLOSURE2 -> offsetclosure2 >> step
+    | OFFSETCLOSURE -> offsetclosure >> step
+    | PUSHOFFSETCLOSUREM2 -> pushoffsetclosurem2 >> step
+    | PUSHOFFSETCLOSURE0 -> pushoffsetclosure0 >> step
+    | PUSHOFFSETCLOSURE2 -> pushoffsetclosure2 >> step
+    | PUSHOFFSETCLOSURE -> pushoffsetclosure >> step
+    | GETGLOBAL -> getglobal >> step
+    | PUSHGETGLOBAL -> pushgetglobal >> step
+    | GETGLOBALFIELD -> getglobalfield >> step
+    | PUSHGETGLOBALFIELD -> pushgetglobalfield >> step
+    | SETGLOBAL -> setglobal >> step
+    | ATOM0 -> atom0 >> step
+    | ATOM -> atom >> step
+    | PUSHATOM0 -> pushatom0 >> step
+    | PUSHATOM -> pushatom >> step
+    | MAKEBLOCK -> makeblock >> step
+    | MAKEBLOCK1 -> makeblockn (const 1) >> step
+    | MAKEBLOCK2 -> makeblockn (const 2) >> step
+    | MAKEBLOCK3 -> makeblockn (const 3) >> step
+    | MAKEFLOATBLOCK -> makefloatblock >> step
+    | GETFIELD0 -> getfieldn (const 0) >> step
+    | GETFIELD1 -> getfieldn (const 1) >> step
+    | GETFIELD2 -> getfieldn (const 2) >> step
+    | GETFIELD3 -> getfieldn (const 3) >> step
+    | GETFIELD -> getfield >> step
+    | GETFLOATFIELD -> getfloatfield >> step
+    | SETFIELD0 -> setfieldn (const 0) >> step
+    | SETFIELD1 -> setfieldn (const 1) >> step
+    | SETFIELD2 -> setfieldn (const 2) >> step
+    | SETFIELD3 -> setfieldn (const 3) >> step
+    | SETFIELD -> setfield >> step
+    | SETFLOATFIELD -> setfloatfield >> step
+    | VECTLENGTH -> vectlength >> step
+    | GETVECTITEM -> getvectitem >> step
+    | SETVECTITEM -> setvectitem >> step
+    | GETSTRINGCHAR -> getstringchar >> step
+    | SETSTRINGCHAR -> setstringchar >> step
+    | BRANCH -> branch >> step
+    | BRANCHIF -> branchif >> step
+    | BRANCHIFNOT -> branchifnot >> step
+    | SWITCH -> switch >> step
+    | BOOLNOT -> boolnot >> step
+    | PUSHTRAP -> pushtrap >> step
+    | POPTRAP -> poptrap >> step
+    | RAISE -> raise_ >> step
+    | CHECK_SIGNALS -> check_signals >> step
     (* argument is number of elements to pop from stack *)
-    | Instr.C_CALL1 -> c_call (const 1)
-    | Instr.C_CALL2 -> c_call (const 2)
-    | Instr.C_CALL3 -> c_call (const 3)
-    | Instr.C_CALL4 -> c_call (const 4)
-    | Instr.C_CALL5 -> c_call (const 5)
-    | Instr.C_CALLN -> c_call (const 0)
-    | Instr.CONST0 -> constn (const 0) >> step
-    | Instr.CONST1 -> constn (const 1) >> step
-    | Instr.CONST2 -> constn (const 2) >> step
-    | Instr.CONST3 -> constn (const 3) >> step
-    | Instr.CONSTINT -> constint >> step
-    | Instr.PUSHCONST0 -> pushconstn (const 0) >> step
-    | Instr.PUSHCONST1 -> pushconstn (const 1) >> step
-    | Instr.PUSHCONST2 -> pushconstn (const 2) >> step
-    | Instr.PUSHCONST3 -> pushconstn (const 3) >> step
-    | Instr.PUSHCONSTINT -> pushconstint >> step
-    | Instr.NEGINT -> negint >> step
-    | Instr.ADDINT -> addint >> step
-    | Instr.SUBINT -> subint >> step
-    | Instr.MULINT -> mulint >> step
-    | Instr.DIVINT -> divint >> step
-    | Instr.MODINT -> modint >> step
-    | Instr.ANDINT -> andint >> step
-    | Instr.ORINT -> orint >> step
-    | Instr.XORINT -> xorint >> step
-    | Instr.LSLINT -> lslint >> step
-    | Instr.LSRINT -> lsrint >> step
-    | Instr.ASRINT -> asrint >> step
-    | Instr.EQ -> eq >> step
-    | Instr.NEQ -> neq >> step
-    | Instr.LTINT -> ltint >> step
-    | Instr.LEINT -> leint >> step
-    | Instr.GTINT -> gtint >> step
-    | Instr.GEINT -> geint >> step
-    | Instr.OFFSETINT -> offsetint >> step
-    | Instr.OFFSETREF -> offsetref >> step
-    | Instr.ISINT -> isint >> step
-    | Instr.GETMETHOD -> getmethod >> step
-    | Instr.BEQ -> beq >> step
-    | Instr.BNEQ -> bneq >> step
-    | Instr.BLTINT -> bltint >> step
-    | Instr.BLEINT -> bleint >> step
-    | Instr.BGTINT -> bgtint >> step
-    | Instr.BGEINT -> bgeint >> step
-    | Instr.ULTINT -> ultint >> step
-    | Instr.UGEINT -> ugeint >> step
-    | Instr.BULTINT -> bultint >> step
-    | Instr.BUGEINT -> bugeint >> step
-    | Instr.GETPUBMET -> getpubmet >> step
-    | Instr.GETDYNMET -> getdynmet >> step
-    | Instr.STOP -> stop >> return `stop
-    | Instr.EVENT -> event >> step
-    | Instr.BREAK -> break >> step
-    | Instr.RERAISE -> reraise >> step
-    | Instr.RAISE_NOTRACE -> raise_notrace >> step
+    | C_CALL1 -> c_call (const 1)
+    | C_CALL2 -> c_call (const 2)
+    | C_CALL3 -> c_call (const 3)
+    | C_CALL4 -> c_call (const 4)
+    | C_CALL5 -> c_call (const 5)
+    | C_CALLN -> c_call (const 0)
+    | CONST0 -> constn (const 0) >> step
+    | CONST1 -> constn (const 1) >> step
+    | CONST2 -> constn (const 2) >> step
+    | CONST3 -> constn (const 3) >> step
+    | CONSTINT -> constint >> step
+    | PUSHCONST0 -> pushconstn (const 0) >> step
+    | PUSHCONST1 -> pushconstn (const 1) >> step
+    | PUSHCONST2 -> pushconstn (const 2) >> step
+    | PUSHCONST3 -> pushconstn (const 3) >> step
+    | PUSHCONSTINT -> pushconstint >> step
+    | NEGINT -> negint >> step
+    | ADDINT -> addint >> step
+    | SUBINT -> subint >> step
+    | MULINT -> mulint >> step
+    | DIVINT -> divint >> step
+    | MODINT -> modint >> step
+    | ANDINT -> andint >> step
+    | ORINT -> orint >> step
+    | XORINT -> xorint >> step
+    | LSLINT -> lslint >> step
+    | LSRINT -> lsrint >> step
+    | ASRINT -> asrint >> step
+    | EQ -> eq >> step
+    | NEQ -> neq >> step
+    | LTINT -> ltint >> step
+    | LEINT -> leint >> step
+    | GTINT -> gtint >> step
+    | GEINT -> geint >> step
+    | OFFSETINT -> offsetint >> step
+    | OFFSETREF -> offsetref >> step
+    | ISINT -> isint >> step
+    | GETMETHOD -> getmethod >> step
+    | BEQ -> beq >> step
+    | BNEQ -> bneq >> step
+    | BLTINT -> bltint >> step
+    | BLEINT -> bleint >> step
+    | BGTINT -> bgtint >> step
+    | BGEINT -> bgeint >> step
+    | ULTINT -> ultint >> step
+    | UGEINT -> ugeint >> step
+    | BULTINT -> bultint >> step
+    | BUGEINT -> bugeint >> step
+    | GETPUBMET -> getpubmet >> step
+    | GETDYNMET -> getdynmet >> step
+    | STOP -> stop >> return `stop
+    | EVENT -> event >> step
+    | BREAK -> break >> step
+    | RERAISE -> reraise >> step
+    | RAISE_NOTRACE -> raise_notrace >> step
 end

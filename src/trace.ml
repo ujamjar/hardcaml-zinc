@@ -146,12 +146,11 @@ let get_instr memory pc =
   Ops.Int64.(sra (if pc mod 2 = 0 then sll instr 32L else instr) 32L)
 
 let instr ?(chan = stdout) st =
-  let open Instr in
   let pc = Int64.to_int st.pc / 4 in
   let instr = get_instr st.memory pc in
-  let instr = Instr.opcode_of_int (Int64.to_int instr) in
+  let instr = Opcode.of_int (Int64.to_int instr) in
   let get_arg n = get_instr st.memory (pc + 1 + n) in
-  fprintf chan "%6i  %s" pc (Instr.string_of_opcode instr);
+  fprintf chan "%6i  %s" pc (Opcode.to_string instr);
   match instr with
   | PUSHACC | ACC | POP | ASSIGN | PUSHENVACC | ENVACC | PUSH_RETADDR | APPLY
   | APPTERM1 | APPTERM2 | APPTERM3 | RETURN | GRAB | PUSHGETGLOBAL | GETGLOBAL

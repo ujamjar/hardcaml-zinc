@@ -252,9 +252,8 @@ end
 type decinstr = { lte : t; gte : t; eq : t; range : t }
 
 let decode instr =
-  let open Instr in
-  let constins i = consti ~width:8 (Instr.Variants_of_opcodes.to_rank i) in
-  let ins = Instr.all_of_opcodes in
+  let constins i = consti ~width:8 (Opcode.to_int i) in
+  let ins = Opcode.all in
   let sel =
     let sel =
       Array.of_list
@@ -268,7 +267,7 @@ let decode instr =
                range = instr -: i;
              })
     in
-    fun i -> sel.(Instr.Variants_of_opcodes.to_rank i)
+    fun i -> sel.(Opcode.to_int i)
   in
 
   let acc = (sel ACC).lte in

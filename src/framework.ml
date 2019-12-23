@@ -112,7 +112,7 @@ module Interp = struct
       }
     in
     let do_exception st v =
-      let _, st = M.step { st with accu = v } O.(dispatch Instr.RAISE) in
+      let _, st = M.step { st with accu = v } O.(dispatch RAISE) in
       Some st
     in
     let st = setup_for_c_call st in
@@ -128,7 +128,7 @@ module Interp = struct
     (* fetch instruction *)
     let pc = Int64.to_int st.pc / 4 in
     let instr = get_instr st.memory pc in
-    let instr = Instr.opcode_of_int @@ Int64.to_int instr in
+    let instr = Opcode.of_int @@ Int64.to_int instr in
     let () =
       if trace > 0 then Trace.instr st;
       if trace > 1 then Trace.machine st
@@ -223,9 +223,7 @@ module Testbench = struct
 
     let _show_instr =
       let ins =
-        Base.List.map Instr.all_of_opcodes ~f:(fun opcode ->
-            Instr.sexp_of_opcodes opcode |> Base.Sexp.to_string_hum)
-        |> Base.Array.of_list
+        Base.List.map Opcode.all ~f:Opcode.to_string |> Base.Array.of_list
       in
 
       fun x ->
@@ -339,8 +337,7 @@ module Testbench = struct
             if cfg.instr_trace then
               printf "%6i  %s\n%!"
                 ((o.pc () / 4) - 1)
-                ( o.instruction () |> Instr.opcode_of_int
-                |> Instr.string_of_opcode );
+                (o.instruction () |> Opcode.of_int |> Opcode.to_string);
             if cfg.state_trace then trace ()
           with _ ->
             stop := true;
