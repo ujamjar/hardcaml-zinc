@@ -11,9 +11,10 @@ type machine_register =
   | `atom_table
   | `alloc_base
   | `stack_high ]
-[@@deriving sexp_of, enumerate]
+[@@deriving sexp_of, enumerate, variants]
 
-type cache = [ `stack | `program | `mem ] [@@deriving sexp_of]
+type cache = [ `stack | `program | `mem ]
+[@@deriving sexp_of, enumerate, variants]
 
 type memory_mapping = {
   code_address : int;

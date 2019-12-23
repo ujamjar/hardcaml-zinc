@@ -149,6 +149,12 @@ type opcodes =
   | RAISE_NOTRACE
 [@@deriving sexp_of, variants, enumerate]
 
+val int_of_opcode : opcodes -> int
+
+val opcode_of_int : int -> opcodes
+
+val string_of_opcode : opcodes -> string
+
 type instruction = opcodes * int32 list
 
 type bytecode = instruction list

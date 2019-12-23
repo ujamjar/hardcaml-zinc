@@ -1,5 +1,6 @@
 (* round robin arbiter *)
 open Import
+open Stdio.Out_channel
 
 type 'a prefix = ('a -> 'a -> 'a) -> 'a list -> 'a list
 
@@ -35,7 +36,6 @@ let arbiter ~prefix ~enable ~req =
   gnt
 
 module Test = struct
-  open Printf
   module B = Bits
   module Cs = Cyclesim
   module Waveform = Hardcaml_waveterm.Waveform
@@ -63,7 +63,7 @@ module Test = struct
         Printf.printf "gnt: %s\n" (B.to_string !gnt);
         S.cycle_comb1 sim;*)
         Cyclesim.cycle sim;
-        Printf.printf "gnt: %s [%s]\n" (B.to_string !gnt) (B.to_string !gntn);
+        printf "gnt: %s [%s]\n" (B.to_string !gnt) (B.to_string !gntn);
         req := B.(!req ^: !gnt)
       done
     done;

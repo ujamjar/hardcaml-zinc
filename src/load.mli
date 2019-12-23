@@ -9,7 +9,7 @@
 (* The table of already numbered objects *)
 
 type bytecode_exe = {
-  toc : (bytes * int) list;
+  toc : (string * int) list;
   crcs : (string * Digest.t option) list;
   dplt : string;
   dlls : string;

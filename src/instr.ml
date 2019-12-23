@@ -1,3 +1,5 @@
+open Import
+
 type opcodes =
   | ACC0
   | ACC1
@@ -149,6 +151,18 @@ type opcodes =
   | RAISE_NOTRACE
 [@@deriving sexp_of, variants, enumerate]
 
+let int_of_opcode opcode = Variants_of_opcodes.to_rank opcode
+
+let opcode_of_int =
+  let map =
+    all_of_opcodes
+    |> List.map ~f:(fun opcode -> (int_of_opcode opcode, opcode))
+    |> Map.of_alist_exn (module Int)
+  in
+  Map.find_exn map
+
+let string_of_opcode opcode = sexp_of_opcodes opcode |> Sexp.to_string_hum
+
 (* simple coding API for the byte codes, which includes any arguments.
  * we'll do a simple translation into an exe so we can run test sequences 
  * through the testbench *)
@@ -246,7 +260,7 @@ let grab n = (GRAB, [ n ])
 let closure n_vars func = (CLOSURE, [ n_vars; func ])
 
 let closurerec n_vars funcs =
-  (CLOSUREREC, n_vars :: Int32.of_int (List.length funcs) :: funcs)
+  (CLOSUREREC, n_vars :: Int32.of_int_exn (List.length funcs) :: funcs)
 
 let pushoffsetclosure n = (PUSHOFFSETCLOSURE, [ n ])
 
@@ -452,6 +466,5 @@ let break = (BREAK, [])
 
 let to_array codes =
   Array.of_list @@ List.concat
-  @@ List.map
-       (fun (o, a) -> (Int32.of_int @@ Enum.from_enum < opcodes > o) :: a)
-       codes
+  @@ List.map codes ~f:(fun (o, a) ->
+         (Int32.of_int_exn @@ int_of_opcode o) :: a)
