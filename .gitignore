@@ -1,4 +1,5 @@
 *~
 .*.swp
 _build/
-arc/.merlin
+src/.merlin
+test/.merlin

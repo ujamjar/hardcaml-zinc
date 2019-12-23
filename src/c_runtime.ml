@@ -452,13 +452,21 @@ let caml_ml_channel_size =
         try x (out_channel_length (find_chan_out st chan))
         with _ -> caml_raise_sys_error' st "caml_ml_channel_size" ))
 
-external is_printable : char -> bool = "caml_is_printable"
+(* XXX has this been removed from the runtime? *)
+(* external is_printable : char -> bool = "caml_is_printable"
+ * 
+ * let caml_is_printable =
+ *   C1
+ *     (fun _ c ->
+ *       `ok
+ *         ( if is_printable (Char.chr (to_int (int_val c))) then val_true
+ *         else val_false )) *)
 
 let caml_is_printable =
   C1
     (fun _ c ->
       `ok
-        ( if is_printable (Char.chr (to_int (int_val c))) then val_true
+        ( if Base.Char.is_print (Char.chr (to_int (int_val c))) then val_true
         else val_false ))
 
 let caml_sys_file_exists =
