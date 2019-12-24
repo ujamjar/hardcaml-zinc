@@ -1,4 +1,4 @@
-open Import
+open Base
 
 (* simple coding API for the byte codes, which includes any arguments.
  * we'll do a simple translation into an exe so we can run test sequences 
