@@ -184,8 +184,8 @@ let dbits = 64 (* XXX *)
 let _init_env () =
   { id_to_wire = Map.empty (module Int)
   ; regs =
-      Base.List.map Machine.all_of_machine_register ~f:(fun r ->
-          let name = Machine.sexp_of_machine_register r |> Base.Sexp.to_string_hum in
+      List.map Machine.all_of_machine_register ~f:(fun r ->
+          let name = Machine.sexp_of_machine_register r |> Sexp.to_string_hum in
           zero dbits -- name)
       |> Array.of_list
   }

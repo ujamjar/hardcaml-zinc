@@ -755,7 +755,7 @@ let caml_obj_set_tag =
 let caml_compare_val st a b =
   (* need better implementation *)
   let (a : Obj.t), (b : Obj.t) = get_obj st a, get_obj st b in
-  Base.Poly.compare a b
+  Poly.compare a b
 ;;
 
 let caml_hash =
