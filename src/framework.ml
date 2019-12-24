@@ -1,24 +1,24 @@
+open Base
 open Machine
 
 let c_heap_size_bytes = 2 * 1024 * 1024 (* 2Mb c-heap *)
 
 let init_memory bc memory_size_words =
-  let open Int64 in
   let open Load in
   (* convert exe to 64 bit *)
   let code_size = (Array.length bc.code + 1) / 2 in
   let code_address = 0 in
   let exe i =
     let a, b =
-      ( of_int32 bc.code.(i * 2)
-      , try of_int32 bc.code.((i * 2) + 1) with
+      ( Int64.of_int32 bc.code.(i * 2)
+      , try Int64.of_int32 bc.code.((i * 2) + 1) with
         | _ -> 0L )
     in
-    let a, b = logand a 0xFFFFFFFFL, logand b 0xFFFFFFFFL in
-    logor a (shift_left b 32)
+    let a, b = Int64.(a land 0xFFFFFFFFL, b land 0xFFFFFFFFL) in
+    Int64.(a lor shift_left b 32)
   in
   (* atoms table *)
-  let atom i = of_int i in
+  let atom i = Int64.of_int i in
   let atoms_address = code_size in
   (* globals *)
   let globals_address = atoms_address + 256 in
@@ -95,18 +95,17 @@ module Interp = struct
 
   let do_c_call st nargs prim =
     let open Ops.Int64 in
-    let open Int64 in
-    assert (nargs <> 0L);
+    assert (not (Int64.equal nargs 0L));
     (* XXX C_CALLN TODO *)
-    let prim = to_int prim in
+    let prim = Int64.to_int_exn prim in
     let setup_for_c_call st =
       let st = { st with sp = st.sp -: 8L } in
-      st.memory.{to_int st.sp / 8} <- st.env;
+      st.memory.{Int64.to_int_exn st.sp / 8} <- st.env;
       st
     in
     let restore_after_c_call st v =
       { st with
-        env = st.memory.{to_int st.sp / 8}
+        env = st.memory.{Int64.to_int_exn st.sp / 8}
       ; sp = st.sp +: (nargs *: 8L)
       ; accu = v
       }
@@ -123,14 +122,14 @@ module Interp = struct
 
   let get_instr memory pc =
     let instr = memory.{pc / 2} in
-    S.(sra (if pc mod 2 = 0 then sll instr 32L else instr) 32L)
+    S.(sra (if pc % 2 = 0 then sll instr 32L else instr) 32L)
   ;;
 
   let step ?(trace = 0) st =
     (* fetch instruction *)
-    let pc = Int64.to_int st.pc / 4 in
+    let pc = Int64.to_int_exn st.pc / 4 in
     let instr = get_instr st.memory pc in
-    let instr = Opcode.of_int @@ Int64.to_int instr in
+    let instr = Opcode.of_int @@ Int64.to_int_exn instr in
     let () =
       if trace > 0 then Trace.instr st;
       if trace > 1 then Trace.machine st
@@ -152,7 +151,7 @@ module Interp = struct
       method step =
         if !running
         then (
-          incr ninstrs;
+          Int.incr ninstrs;
           match step !state with
           | Some st -> state := st
           | None -> running := false)
@@ -209,7 +208,7 @@ module Interp = struct
 
           method value v =
             Trace.value !state v;
-            Printf.printf "\n"
+            Stdio.printf "\n"
 
           method root v = Trace.root !state v
         end

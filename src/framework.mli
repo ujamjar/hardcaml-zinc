@@ -1,3 +1,5 @@
+open Base
+
 val init_memory : Load.bytecode_exe -> int -> Machine.memory_mapping * Repr.memory
 
 val init_state
@@ -10,7 +12,7 @@ module Interp : sig
   open Machine
 
   val init : prog:string -> argv:string array -> memsize_kb:int -> state
-  val do_c_call : state -> int64 -> int64 -> state option
+  val do_c_call : state -> Int64.t -> int64 -> state option
   val step : ?trace:int -> state -> state option
 
   val interactive
@@ -29,6 +31,6 @@ module Interp : sig
        ; trace :
            < machine : unit
            ; instr : unit
-           ; value : int64 -> unit
-           ; root : int64 -> unit > >
+           ; value : Int64.t -> unit
+           ; root : Int64.t -> unit > >
 end
