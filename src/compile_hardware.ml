@@ -1,11 +1,12 @@
 (* compile hardware design from [Interp] *)
 
+open Base
 open Interp
 
-let _initr x = Array.init Machine.num_machine_registers (fun _ -> x)
+let _initr x = Array.init Machine.num_machine_registers ~f:(fun _ -> x)
 let getr a i = a.(Machine.Variants_of_machine_register.to_rank i)
 let setr a i v = a.(Machine.Variants_of_machine_register.to_rank i) <- v
-let _initc x = Array.init Machine.num_cache_spaces (fun _ -> x)
+let _initc x = Array.init Machine.num_cache_spaces ~f:(fun _ -> x)
 let _getc a i = a.(Machine.Variants_of_cache.to_rank i)
 let _setc a i v = a.(Machine.Variants_of_cache.to_rank i) <- v
 
@@ -41,7 +42,7 @@ let const_eval op e0 e1 =
     | "-" -> Some (Const (e0 - e1))
     | "*" -> Some (Const (e0 * e1))
     | "/" -> Some (Const (e0 / e1))
-    | "%" -> Some (Const (e0 mod e1))
+    | "%" -> Some (Const (e0 % e1))
     | "&" -> Some (Const (e0 land e1))
     | "|" -> Some (Const (e0 lor e1))
     | "^" -> Some (Const (e0 lxor e1))
@@ -90,8 +91,9 @@ let rec _stat_deps x =
   | Set_reg (_, value) -> `cmd (x, expr_deps value)
   | Get_mem (_, _, addr) -> `cmd (x, expr_deps addr)
   | Set_mem (_, addr, value) -> `cmd (x, expr_deps addr @ expr_deps value)
-  | Cond (c, t, f) -> `cond (x, expr_deps c, List.map _stat_deps t, List.map _stat_deps f)
-  | Iter (_, _, f, t, c) -> `iter (x, expr_deps f @ expr_deps t, List.map _stat_deps c)
+  | Cond (c, t, f) ->
+    `cond (x, expr_deps c, List.map t ~f:_stat_deps, List.map f ~f:_stat_deps)
+  | Iter (_, _, f, t, c) -> `iter (x, expr_deps f @ expr_deps t, List.map c ~f:_stat_deps)
 ;;
 
 let rec simplify_stat = function
@@ -104,15 +106,9 @@ let rec simplify_stat = function
   | Iter (ud, id, f, t, c) ->
     Iter (ud, id, simplify_expr f, simplify_expr t, simplify_stats c)
 
-and simplify_stats x = List.map simplify_stat x
+and simplify_stats x = List.map x ~f:simplify_stat
 
 let simplify st = { st with cmd = simplify_stats st.cmd }
-
-module M = Map.Make (struct
-  type t = int
-
-  let compare = compare
-end)
 
 (* 
       Lets try to understand the problems here.
@@ -179,14 +175,14 @@ open Hardcaml
 open Signal
 
 type env =
-  { id_to_wire : t M.t
+  { id_to_wire : t Map.M(Int).t
   ; regs : t array
   }
 
 let dbits = 64 (* XXX *)
 
 let _init_env () =
-  { id_to_wire = M.empty
+  { id_to_wire = Map.empty (module Int)
   ; regs =
       Base.List.map Machine.all_of_machine_register ~f:(fun r ->
           let name = Machine.sexp_of_machine_register r |> Base.Sexp.to_string_hum in
@@ -206,19 +202,17 @@ type state =
   }
 
 let print_states sts =
-  List.iter
-    (fun st ->
+  List.iter sts ~f:(fun st ->
       let open Printf in
-      printf "****** %i\n" st.n;
+      Stdio.printf "****** %i\n" st.n;
       Interp.State_poly.(print { id = 0; cmd = st.instrs });
-      printf
+      Stdio.printf
         "next = %s\n"
         (match st.next with
         | `next i -> sprintf "%i" i
         | `mem (_, i) -> sprintf "%i [mem]" i
         | `branch (_, a, b) -> sprintf "%i/%i [branch]" a b);
-      printf "\n")
-    sts
+      Stdio.printf "\n")
 ;;
 
 let compile st =
@@ -241,22 +235,29 @@ let compile st =
       | "<<" -> sll a (const_val b')
       | _ -> failwith ("unknown expression operator '" ^ op ^ "'"))
     | Val id ->
-      (try M.find id env.id_to_wire with
-      | _ -> failwith ("cant find variable " ^ string_of_int id))
+      (match Map.find env.id_to_wire id with
+      | Some x -> x
+      | None -> failwith ("cant find variable " ^ Int.to_string id))
     | Const x -> consti ~width:dbits x
   in
   let rec _compile_stats env = function
     | [] -> env
     (* (psuedo-) update registers and expressions *)
     | Get_reg (id, reg) :: t ->
-      let env = { env with id_to_wire = M.add id (getr env.regs reg) env.id_to_wire } in
+      let env =
+        { env with
+          id_to_wire = Map.add_exn env.id_to_wire ~key:id ~data:(getr env.regs reg)
+        }
+      in
       _compile_stats env t
     | Set_reg (reg, vl) :: t ->
       setr env.regs reg (compile_expr env vl);
       _compile_stats env t
     (* memory io and state completion *)
     | Get_mem (id, _, _) :: t ->
-      let env = { env with id_to_wire = M.add id (wire dbits) env.id_to_wire } in
+      let env =
+        { env with id_to_wire = Map.add_exn env.id_to_wire ~key:id ~data:(wire dbits) }
+      in
       _compile_stats env t
     | Set_mem (_, _, _) :: t -> _compile_stats env t
     | _ -> failwith "not yet"
@@ -273,10 +274,14 @@ let compile st =
     | (Set_reg _ as x) :: t -> compile_states (cs, rs, sts) (x :: instrs) t
     (* Get/Set_mem generate new states *)
     | (Set_mem _ as x) :: t ->
-      let st = newst ~instrs ~next:(`mem (x, if t = [] then rs else cs + 1)) ~n:cs () in
+      let st =
+        newst ~instrs ~next:(`mem (x, if List.is_empty t then rs else cs + 1)) ~n:cs ()
+      in
       compile_states (cs + 1, rs, st :: sts) [] t
     | (Get_mem _ as x) :: t ->
-      let st = newst ~instrs ~next:(`mem (x, if t = [] then rs else cs + 1)) ~n:cs () in
+      let st =
+        newst ~instrs ~next:(`mem (x, if List.is_empty t then rs else cs + 1)) ~n:cs ()
+      in
       compile_states (cs + 1, rs, st :: sts) [] t
     (* control flow creates new states *)
     | (Cond (_, a, b) as x) :: t ->
@@ -292,7 +297,7 @@ let compile st =
   in
   (*compile_stats (init_env ()) cmd*)
   let _, _, sts = compile_states (0, 0, []) [] cmd in
-  let sts = List.sort (fun a b -> compare a.n b.n) sts in
+  let sts = List.sort ~compare:(fun a b -> Int.compare a.n b.n) sts in
   let () = print_states sts in
   ()
 ;;
