@@ -4,8 +4,7 @@ open Base
  * we'll do a simple translation into an exe so we can run test sequences 
  * through the testbench *)
 
-type instruction = Opcode.t * int32 list
-type bytecode = instruction list
+type t = Opcode.t * int32 list [@@deriving sexp_of]
 
 open Opcode
 
