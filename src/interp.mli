@@ -1,3 +1,4 @@
+open Base
 open Machine
 
 module type State = sig

@@ -1,3 +1,5 @@
+open Base
+
 type t =
   | ACC0
   | ACC1
@@ -147,7 +149,7 @@ type t =
   | BREAK
   | RERAISE
   | RAISE_NOTRACE
-[@@deriving enumerate, sexp_of]
+[@@deriving equal, compare, enumerate, sexp_of]
 
 val to_int : t -> int
 val of_int : int -> t

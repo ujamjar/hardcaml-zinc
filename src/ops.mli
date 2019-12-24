@@ -1,3 +1,5 @@
+open Base
+
 module type S = sig
   type t [@@deriving equal, compare]
 

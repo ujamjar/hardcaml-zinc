@@ -1,3 +1,6 @@
+open Base
+module Obj = Caml.Obj
+
 type memory = (Int64.t, Bigarray.int64_elt, Bigarray.c_layout) Bigarray.Array1.t
 
 (** intermediate representation of ocaml memory values *)

@@ -1,4 +1,4 @@
-open Import
+open Base
 
 type t =
   | ACC0
@@ -149,7 +149,7 @@ type t =
   | BREAK
   | RERAISE
   | RAISE_NOTRACE
-[@@deriving sexp_of, variants, enumerate]
+[@@deriving equal, compare, sexp_of, variants, enumerate]
 
 let to_int opcode = Variants.to_rank opcode
 

@@ -1,3 +1,5 @@
+open Base
+
 type bytecode_exe =
   { toc : (string * int) list
   ; crcs : (string * Caml.Digest.t option) list

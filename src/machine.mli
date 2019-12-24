@@ -1,3 +1,5 @@
+open Base
+
 type machine_register =
   (* zinc registers *)
   [ `accu

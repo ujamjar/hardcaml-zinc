@@ -1,3 +1,5 @@
+open Base
+
 module type S = sig
   type t [@@deriving equal, compare]
 
@@ -29,30 +31,28 @@ module type S = sig
 end
 
 module Int64 = struct
-  open Int64
-
   type t = Int64.t [@@deriving equal, compare]
 
-  let const = of_int
+  let const = Int64.of_int
   let zero = 0L
   let one = 1L
-  let ( +: ) a b = add a b
-  let ( -: ) a b = sub a b
-  let ( *: ) a b = mul a b
-  let ( /: ) a b = div a b
-  let ( %: ) a b = rem a b
-  let ( &: ) a b = logand a b
-  let ( |: ) a b = logor a b
-  let ( ^: ) a b = logxor a b
-  let ( ~: ) a = lognot a
-  let sll a b = shift_left a (to_int b)
-  let srl a b = shift_right_logical a (to_int b)
-  let sra a b = shift_right a (to_int b)
-  let ( ==: ) a b = if a = b then 1L else 0L
-  let ( <>: ) a b = if a <> b then 1L else 0L
-  let ( <+ ) a b = if Int64.compare a b = -1 then 1L else 0L
+  let ( +: ) a b = Int64.(a + b)
+  let ( -: ) a b = Int64.(a - b)
+  let ( *: ) a b = Int64.(a * b)
+  let ( /: ) a b = Int64.(a / b)
+  let ( %: ) a b = Int64.(a % b)
+  let ( &: ) a b = Int64.(a land b)
+  let ( |: ) a b = Int64.(a lor b)
+  let ( ^: ) a b = Int64.(a lxor b)
+  let ( ~: ) a = Int64.(lnot a)
+  let sll a b = Int64.shift_left a (Int64.to_int_exn b)
+  let srl a b = Int64.shift_right_logical a (Int64.to_int_exn b)
+  let sra a b = Int64.shift_right a (Int64.to_int_exn b)
+  let ( ==: ) a b = if Int64.equal a b then 1L else 0L
+  let ( <>: ) a b = if not (Int64.equal a b) then 1L else 0L
+  let ( <+ ) a b = if Int64.compare a b < 0 then 1L else 0L
   let ( <=+ ) a b = if Int64.compare a b <= 0 then 1L else 0L
-  let ( >+ ) a b = if Int64.compare a b = 1 then 1L else 0L
+  let ( >+ ) a b = if Int64.compare a b > 0 then 1L else 0L
   let ( >=+ ) a b = if Int64.compare a b >= 0 then 1L else 0L
   let mask = 0x8000_0000_0000_0000L
   let ( <: ) a b = a ^: mask <+ b ^: mask
