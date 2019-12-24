@@ -1,5 +1,5 @@
 module type S = sig
-  type t
+  type t [@@deriving equal, compare]
 
   val const : int -> t
   val zero : t

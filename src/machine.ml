@@ -12,14 +12,14 @@ type machine_register =
   | `alloc_base
   | `stack_high
   ]
-[@@deriving sexp_of, enumerate, variants]
+[@@deriving equal, compare, sexp_of, enumerate, variants]
 
 type cache =
   [ `stack
   | `program
   | `mem
   ]
-[@@deriving sexp_of, enumerate, variants]
+[@@deriving equal, compare, sexp_of, enumerate, variants]
 
 type memory_mapping =
   { code_address : int

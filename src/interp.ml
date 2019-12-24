@@ -3,7 +3,10 @@
  *
  *)
 
+open Base
 open Machine
+
+let stdout = Stdio.Out_channel.stdout
 
 module type State = sig
   type st
@@ -67,40 +70,40 @@ module State_eval = struct
   ;;
 
   let get_mem st _cache adr =
-    try st.memory.{Int64.to_int adr}, st with
+    try st.memory.{Int64.to_int_exn adr}, st with
     | Invalid_argument x ->
       raise (Invalid_argument ("get_mem {" ^ Int64.to_string adr ^ "} " ^ x))
   ;;
 
   let set_mem st _cache adr v =
     try
-      st.memory.{Int64.to_int adr} <- v;
+      st.memory.{Int64.to_int_exn adr} <- v;
       st
     with
     | Invalid_argument x ->
       raise (Invalid_argument ("set_mem {" ^ Int64.to_string adr ^ "} " ^ x))
   ;;
 
-  let cond st c t f = snd @@ if c <> 0L then t st else f st
+  let cond st c t f = snd @@ if not (Int64.equal c 0L) then t st else f st
 
   let iter_up st m n f =
     let rec g st i =
-      if i >= n
+      if Int64.(compare i n) >= 0
       then st
       else (
         let _, st = f i st in
-        g st (Int64.add i 1L))
+        g st Int64.(i + 1L))
     in
     g st m
   ;;
 
   let iter_dn st m n f =
     let rec g st i =
-      if i < n
+      if Int64.compare i n < 0
       then st
       else (
         let _, st = f i st in
-        g st (Int64.sub i 1L))
+        g st Int64.(i - 1L))
     in
     g st m
   ;;
@@ -111,10 +114,10 @@ module State_eval = struct
     let li = ref 3L in
     let hi = ref hi in
     let mi = ref 0L in
-    while !li < !hi do
+    while Int64.compare !li !hi < 0 do
       mi := sra (!li +: !hi) 1L |: 1L;
       let fld, _ = get_mem st `mem (srl meths 3L +: !mi) in
-      if 1L = (st.accu <+ fld) then hi := !mi -: const 2 else li := !mi
+      if Int64.equal 1L (st.accu <+ fld) then hi := !mi -: const 2 else li := !mi
     done;
     !li, st
   ;;
@@ -139,9 +142,10 @@ and sp_st =
   { id : int
   ; cmd : sp_cmd list
   }
+[@@deriving equal, compare]
 
 module State_poly = struct
-  type t = sp_t
+  type t = sp_t [@@deriving equal, compare]
   type st = sp_st
 
   let empty = { id = 0; cmd = [] }
@@ -205,45 +209,41 @@ module State_poly = struct
 
   let rec string_of_value = function
     | Op (o, a, b) -> "(" ^ string_of_value a ^ o ^ string_of_value b ^ ")"
-    | Val i -> "_" ^ string_of_int i
-    | Const i -> string_of_int i
+    | Val i -> "_" ^ Int.to_string i
+    | Const i -> Int.to_string i
   ;;
 
   let rec normalise cmd =
     List.rev
-    @@ List.map
-         (function
+    @@ List.map cmd ~f:(function
            | Cond (c, t, f) -> Cond (c, normalise t, normalise f)
            | Iter (a, b, c, d, e) -> Iter (a, b, c, d, normalise e)
            | _ as x -> x)
-         cmd
   ;;
 
   let rec print lev st =
-    let open Printf in
     let pad = String.make lev ' ' in
-    List.iter
-      (function
-        | Get_reg (i, r) -> printf "%s_%i = %s;\n" pad i (string_of_mach_reg r)
+    List.iter st ~f:(function
+        | Get_reg (i, r) -> Stdio.printf "%s_%i = %s;\n" pad i (string_of_mach_reg r)
         | Set_reg (r, v) ->
-          printf "%s%s = %s;\n" pad (string_of_mach_reg r) (string_of_value v)
+          Stdio.printf "%s%s = %s;\n" pad (string_of_mach_reg r) (string_of_value v)
         | Get_mem (i, c, a) ->
-          printf "%s_%i = %s[%s];\n" pad i (string_of_cache c) (string_of_value a)
+          Stdio.printf "%s_%i = %s[%s];\n" pad i (string_of_cache c) (string_of_value a)
         | Set_mem (c, a, v) ->
-          printf
+          Stdio.printf
             "%s%s[%s] = %s;\n"
             pad
             (string_of_cache c)
             (string_of_value a)
             (string_of_value v)
         | Cond (c, t, f) ->
-          printf "%sif %s then\n" pad (string_of_value c);
+          Stdio.printf "%sif %s then\n" pad (string_of_value c);
           print (lev + 2) t;
-          printf "%selse\n" pad;
+          Stdio.printf "%selse\n" pad;
           print (lev + 2) f;
-          printf "%send\n" pad
+          Stdio.printf "%send\n" pad
         | Iter (d, i, m, n, b) ->
-          printf
+          Stdio.printf
             "%sfor _%i=[%s %s %s] do\n"
             pad
             i
@@ -251,8 +251,7 @@ module State_poly = struct
             (if d then "to" else "downto")
             (string_of_value n);
           print (lev + 2) b;
-          printf "%sdone\n" pad)
-      st
+          Stdio.printf "%sdone\n" pad)
   ;;
 
   let print st = print 0 (normalise st.cmd)
@@ -302,8 +301,8 @@ struct
   let ( >> ) m f = bind m (fun _ -> f)
 
   let debug s st =
-    ( (output_string stdout s;
-       flush stdout)
+    ( (Stdio.Out_channel.output_string stdout s;
+       Stdio.Out_channel.flush stdout)
     , st )
   ;;
 
@@ -321,7 +320,7 @@ struct
     let open S in
     let ins, st = S.get_mem st `program (srl adr c3) in
     let sel = adr &: const 4 in
-    let ins = sra (if sel = zero then sll ins c32 else ins) c32 in
+    let ins = sra (if S.equal sel zero then sll ins c32 else ins) c32 in
     ins, st
   ;;
 

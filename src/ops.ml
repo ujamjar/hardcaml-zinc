@@ -1,5 +1,5 @@
 module type S = sig
-  type t
+  type t [@@deriving equal, compare]
 
   val const : int -> t
   val zero : t
@@ -31,7 +31,7 @@ end
 module Int64 = struct
   open Int64
 
-  type t = int64
+  type t = Int64.t [@@deriving equal, compare]
 
   let const = of_int
   let zero = 0L
