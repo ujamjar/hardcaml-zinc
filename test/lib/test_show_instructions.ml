@@ -1,10 +1,23 @@
 open Base
 open Stdio.Out_channel
 open Hardcaml_zinc
-open Zinc2
+
+module M =
+  Interp.Monad
+    (struct
+      let trace = false
+    end)
+    (Interp.State_poly)
+
+module O = Interp.Opcodes (M)
 
 let show instr =
-  try S.print @@ Compile.simplify @@ snd @@ O.dispatch instr S.empty with
+  try
+    Interp.State_poly.print
+    @@ Compile_hardware.simplify
+    @@ snd
+    @@ O.dispatch instr Interp.State_poly.empty
+  with
   | _ -> printf "NOT IMPLEMENTED\n"
 ;;
 
