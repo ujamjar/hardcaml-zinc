@@ -1,10 +1,27 @@
 (* c-runtime hacks *)
+open Base
 open Machine
+module Obj = Caml.Obj
+module Parsing = Caml.Parsing
 
-type result =
-  [ `ok of int64
-  | `exn of int64
-  ]
+type open_flag = Caml.open_flag
+
+let in_channel_length = Caml.in_channel_length
+let input = Caml.input
+let input_value = Caml.input_value
+let seek_in = Caml.seek_in
+let pos_in = Caml.pos_in
+let input_char = Caml.input_char
+let input_binary_int = Caml.input_binary_int
+let close_in = Caml.close_in
+let out_channel_length = Caml.out_channel_length
+let seek_out = Caml.seek_out
+let output_char = Caml.output_char
+let output_substring = Caml.output_substring
+let close_out = Caml.close_out
+let flush = Caml.flush
+
+type result = (Int64.t, Int64.t) Result.t
 
 type c_call =
   | C1 of (state -> int64 -> result)
@@ -29,7 +46,6 @@ type std_exn =
   | UNDEFINED_RECURSIVE_MODULE_EXN (* "Undefined_recursive_module" *)
 [@@deriving sexp_of, variants]
 
-open Int64
 open Ops.Int64
 include Mlvalues.Make (Ops.Int64)
 
@@ -51,7 +67,7 @@ let bump size =
 (* alplocate a block in the c-heap. *)
 let alloc_block ~st ~size ~colour ~tag =
   let p = !c_heap_address in
-  bump (Int64.to_int size + 1);
+  bump (Int64.to_int_exn size + 1);
   st.memory.{p} <- make_header size colour tag;
   Int64.of_int ((p + 1) * 8)
 ;;
@@ -90,26 +106,26 @@ let alloc_block_from : state -> 'a -> int64 =
   | _ -> raise Alloc_block_from
 ;;
 
-let header st v = st.memory.{(to_int v / 8) - 1}
-let field st v i = st.memory.{(to_int v / 8) + i}
-let set_field st v i d = st.memory.{(to_int v / 8) + i} <- d
+let header st v = st.memory.{(Int64.to_int_exn v / 8) - 1}
+let field st v i = st.memory.{(Int64.to_int_exn v / 8) + i}
+let set_field st v i d = st.memory.{(Int64.to_int_exn v / 8) + i} <- d
 let set_header st v d = set_field st v (-1) d
 let modify = set_field
-let c1_unit = C1 (fun _ _ -> `ok val_unit)
-let c2_unit = C2 (fun _ _ _ -> `ok val_unit)
-let _c3_unit = C3 (fun _ _ _ _ -> `ok val_unit)
-let _c4_unit = C4 (fun _ _ _ _ _ -> `ok val_unit)
-let _c5_unit = C5 (fun _ _ _ _ _ _ -> `ok val_unit)
-let _c1_id = C1 (fun _ a -> `ok a)
-let c1_int i = C1 (fun _ _ -> `ok (val_int i))
-let c2_int i = C2 (fun _ _ _ -> `ok (val_int i))
-let c1_true = C1 (fun _ _ -> `ok val_true)
-let c1_false = C1 (fun _ _ -> `ok val_false)
+let c1_unit = C1 (fun _ _ -> Ok val_unit)
+let c2_unit = C2 (fun _ _ _ -> Ok val_unit)
+let _c3_unit = C3 (fun _ _ _ _ -> Ok val_unit)
+let _c4_unit = C4 (fun _ _ _ _ _ -> Ok val_unit)
+let _c5_unit = C5 (fun _ _ _ _ _ _ -> Ok val_unit)
+let _c1_id = C1 (fun _ a -> Ok a)
+let c1_int i = C1 (fun _ _ -> Ok (val_int i))
+let c2_int i = C2 (fun _ _ _ -> Ok (val_int i))
+let c1_true = C1 (fun _ _ -> Ok val_true)
+let c1_false = C1 (fun _ _ -> Ok val_false)
 
 let caml_copy_string st s =
   let size = size (header st s) in
   let p = alloc_block ~st ~size ~colour:white ~tag:string_tag in
-  for i = 0 to to_int size - 1 do
+  for i = 0 to Int64.to_int_exn size - 1 do
     set_field st p i (field st s i)
   done;
   p
@@ -118,7 +134,7 @@ let caml_copy_string st s =
 let caml_copy_string' st s =
   let s = Obj.repr s in
   let size = Obj.size s in
-  let p = alloc_block ~st ~size:(of_int size) ~colour:white ~tag:string_tag in
+  let p = alloc_block ~st ~size:(Int64.of_int size) ~colour:white ~tag:string_tag in
   for i = 0 to size - 1 do
     set_field st p i (Repr.int64_of_obj (Obj.field s i))
   done;
@@ -126,7 +142,7 @@ let caml_copy_string' st s =
 ;;
 
 (* exceptions (fail.c) *)
-let caml_raise _ v = `exn v
+let caml_raise _ v = Error v
 let caml_raise_constant = caml_raise
 
 let caml_raise_with_arg st tag arg =
@@ -165,40 +181,42 @@ let caml_raise_not_found st = caml_raise_constant st (exn_field st NOT_FOUND_EXN
 let _caml_raise_sys_blocked_io st = caml_raise_constant st (exn_field st SYS_BLOCKED_IO)
 
 let _caml_is_special_exception st exn =
-  exn = exn_field st MATCH_FAILURE_EXN
-  || exn = exn_field st ASSERT_FAILURE_EXN
-  || exn = exn_field st UNDEFINED_RECURSIVE_MODULE_EXN
+  Int64.equal exn (exn_field st MATCH_FAILURE_EXN)
+  || Int64.equal exn (exn_field st ASSERT_FAILURE_EXN)
+  || Int64.equal exn (exn_field st UNDEFINED_RECURSIVE_MODULE_EXN)
 ;;
 
 let aofs x = sll x 3L
 
 let caml_alloc st size tag =
-  if size = 0L
+  if Int64.equal size 0L
   then st.atom_table +: aofs tag
   else (
     let p = alloc_block ~st ~size ~colour:white ~tag in
-    if tag <+ no_scan_tag = 1L
+    if Int64.equal (tag <+ no_scan_tag) 1L
     then
-      for i = 0 to to_int size - 1 do
+      for i = 0 to Int64.to_int_exn size - 1 do
         set_field st p i val_unit
       done;
     p)
 ;;
 
-let caml_alloc_dummy = C1 (fun st size -> `ok (caml_alloc st (int_val size) 0L))
+let caml_alloc_dummy = C1 (fun st size -> Ok (caml_alloc st (int_val size) 0L))
 
 let caml_update_dummy =
   C2
     (fun st dummy newval ->
       let hdummy = header st dummy in
       let hnewval = header st newval in
-      assert (size hdummy = size hnewval);
-      assert (tag newval < no_scan_tag || tag newval = double_array_tag);
+      assert (Int64.equal (size hdummy) (size hnewval));
+      assert (
+        Int64.compare (tag newval) no_scan_tag < 0
+        || Int64.equal (tag newval) double_array_tag);
       set_header st dummy (make_header (size hdummy) (colour hdummy) (tag hnewval));
-      for i = 0 to to_int (size hdummy) - 1 do
+      for i = 0 to Int64.to_int_exn (size hdummy) - 1 do
         modify st dummy i (field st newval i)
       done;
-      `ok val_unit)
+      Ok val_unit)
 ;;
 
 let caml_set_oo_id =
@@ -206,8 +224,8 @@ let caml_set_oo_id =
   C1
     (fun st ptr ->
       set_field st ptr 1 !c;
-      c := add !c 2L;
-      `ok ptr)
+      c := !c +: 2L;
+      Ok ptr)
 ;;
 
 let caml_get_section_table = C1 (fun st _ -> caml_raise_not_found st)
@@ -217,12 +235,15 @@ let caml_int64_float_of_bits =
     (fun st v ->
       let p = alloc_block ~st ~size:1L ~colour:black ~tag:double_tag in
       set_field st p 0 (field st v 1);
-      `ok p)
+      Ok p)
 ;;
 
 let file_descrs = ref []
 let add_descr fd chan ptr = file_descrs := (fd, (chan, ptr)) :: !file_descrs
-let remove_descr fd = file_descrs := List.filter (fun (fd', _) -> fd' <> fd) !file_descrs
+
+let remove_descr fd =
+  file_descrs := List.filter !file_descrs ~f:(fun (fd', _) -> not (Int64.equal fd' fd))
+;;
 
 let descr_block st fd =
   let p = alloc_block ~st ~size:2L ~colour:white ~tag:custom_tag in
@@ -238,8 +259,9 @@ let get_descr x =
 ;;
 
 let find_chan st p =
-  try List.assoc (field st p 1) !file_descrs with
-  | _ -> failwith ("in channel not found (" ^ Int64.to_string (field st p 1) ^ ")")
+  match List.Assoc.find ~equal:Int64.equal !file_descrs (field st p 1) with
+  | Some x -> x
+  | None -> failwith ("in channel not found (" ^ Int64.to_string (field st p 1) ^ ")")
 ;;
 
 let unlink_chan st p =
@@ -251,13 +273,13 @@ let unlink_chan st p =
 let find_chan_in st p =
   match find_chan st p with
   | `i f, _ -> f
-  | _ -> raise Not_found
+  | _ -> raise Caml.Not_found
 ;;
 
 let find_chan_out st p =
   match find_chan st p with
   | `o f, _ -> f
-  | _ -> raise Not_found
+  | _ -> raise Caml.Not_found
 ;;
 
 let caml_ml_open_descriptor_in =
@@ -266,7 +288,7 @@ let caml_ml_open_descriptor_in =
       let fd' = get_descr fd in
       let p = descr_block st fd in
       add_descr fd (`i (Unix.in_channel_of_descr fd')) p;
-      `ok p)
+      Ok p)
 ;;
 
 let caml_ml_open_descriptor_out =
@@ -275,7 +297,7 @@ let caml_ml_open_descriptor_out =
       let fd' = get_descr fd in
       let p = descr_block st fd in
       add_descr fd (`o (Unix.out_channel_of_descr fd')) p;
-      `ok p)
+      Ok p)
 ;;
 
 let caml_ml_close_channel =
@@ -285,39 +307,34 @@ let caml_ml_close_channel =
       (* raise exn? *)
       | `i f, _ -> close_in f
       | `o f, _ -> close_out f);
-      `ok val_unit)
+      Ok val_unit)
 ;;
 
 let mk_list st l =
-  List.fold_right
-    (fun p l ->
+  List.fold_right l ~init:(val_int 0L) ~f:(fun p l ->
       let x = alloc_block ~st ~size:2L ~tag:0L ~colour:white in
       set_field st x 0 p;
       set_field st x 1 l;
       x)
-    l
-    (val_int 0L)
 ;;
 
 let caml_ml_out_channels_list =
   C1
     (fun st _ ->
       let l =
-        List.filter
-          (function
+        List.filter !file_descrs ~f:(function
             | _, (`o _, _) -> true
             | _ -> false)
-          !file_descrs
       in
-      let l = List.map (fun (_, (_, p)) -> p) l in
-      `ok (mk_list st l))
+      let l = List.map l ~f:(fun (_, (_, p)) -> p) in
+      Ok (mk_list st l))
 ;;
 
 let caml_ml_output_char =
   C2
     (fun st chan c ->
-      output_char (find_chan_out st chan) (Char.chr (to_int (int_val c)));
-      `ok val_unit)
+      output_char (find_chan_out st chan) (Char.of_int_exn (Int64.to_int_exn (int_val c)));
+      Ok val_unit)
 ;;
 
 let caml_ml_flush =
@@ -325,17 +342,17 @@ let caml_ml_flush =
     (fun st chan ->
       let chan = find_chan_out st chan in
       flush chan;
-      `ok val_unit)
+      Ok val_unit)
 ;;
 
 let string_length st v =
-  assert (string_tag = tag (header st v));
-  let size = to_int @@ size (header st v) in
-  let pad = to_int @@ shift_right_logical (field st v (size - 1)) 56 in
-  of_int @@ ((size * 8) - pad - 1)
+  assert (Int64.equal string_tag (tag (header st v)));
+  let size = Int64.to_int_exn @@ size (header st v) in
+  let pad = Int64.to_int_exn @@ Int64.shift_right_logical (field st v (size - 1)) 56 in
+  Int64.of_int @@ ((size * 8) - pad - 1)
 ;;
 
-let caml_ml_string_length = C1 (fun st v -> `ok (val_int @@ string_length st v))
+let caml_ml_string_length = C1 (fun st v -> Ok (val_int @@ string_length st v))
 let get_string st v = (get_obj st v : string)
 
 let caml_ml_output =
@@ -345,9 +362,9 @@ let caml_ml_output =
       output_substring
         (find_chan_out st chan)
         str
-        (to_int @@ int_val ofs)
-        (to_int @@ int_val len);
-      `ok val_unit)
+        (Int64.to_int_exn @@ int_val ofs)
+        (Int64.to_int_exn @@ int_val len);
+      Ok val_unit)
 ;;
 
 let caml_ml_input_scan_line =
@@ -356,21 +373,21 @@ let caml_ml_input_scan_line =
       let chan = find_chan_in st fd in
       let pos = pos_in chan in
       let rec f n =
-        try if input_char chan = '\n' then n + 1 else f (n + 1) with
+        try if Char.equal (input_char chan) '\n' then n + 1 else f (n + 1) with
         | _ -> -n
       in
       let n = f 0 in
       let () = seek_in chan pos in
       (* restore file pos (I think) *)
-      `ok (val_int (Int64.of_int n)))
+      Ok (val_int (Int64.of_int n)))
 ;;
 
 let caml_ml_seek_in =
   C2
     (fun st chan pos ->
       try
-        seek_in (find_chan_in st chan) (to_int (int_val pos));
-        `ok val_unit
+        seek_in (find_chan_in st chan) (Int64.to_int_exn (int_val pos));
+        Ok val_unit
       with
       | _ -> caml_raise_sys_error' st "caml_ml_seek_in")
 ;;
@@ -379,25 +396,25 @@ let caml_ml_seek_out =
   C2
     (fun st chan pos ->
       try
-        seek_out (find_chan_out st chan) (to_int (int_val pos));
-        `ok val_unit
+        seek_out (find_chan_out st chan) (Int64.to_int_exn (int_val pos));
+        Ok val_unit
       with
       | _ -> caml_raise_sys_error' st "caml_ml_seek_out")
 ;;
 
 let set_byte' st s ofs b =
   let w = field st s (ofs / 8) in
-  let sft = of_int (ofs land 7 * 8) in
+  let sft = Int64.of_int (ofs land 7 * 8) in
   let mask = ~:(sll 255L sft) in
   let b = sll (b &: 255L) sft in
   set_field st s (ofs / 8) (w &: mask |: b)
 ;;
 
-let set_byte st s ofs b = set_byte' st s ofs (Int64.of_int (Char.code b))
+let set_byte st s ofs b = set_byte' st s ofs (Int64.of_int (Char.to_int b))
 
 let get_byte st s ofs =
   let w = field st s (ofs / 8) in
-  let sft = of_int (ofs land 7 * 8) in
+  let sft = Int64.of_int (ofs land 7 * 8) in
   srl w sft &: 255L
 ;;
 
@@ -405,42 +422,42 @@ let caml_string_get =
   C2
     (fun st s i ->
       let i = int_val i in
-      if i < 0L || i >= string_length st s
+      if Int64.compare i 0L < 0 || Int64.compare i (string_length st s) >= 0
       then caml_array_bound_error st
-      else `ok (val_int (get_byte st s (to_int i))))
+      else Ok (val_int (get_byte st s (Int64.to_int_exn i))))
 ;;
 
 let caml_string_set =
   C3
     (fun st s i b ->
       let i = int_val i in
-      if i < 0L || i >= string_length st s
+      if Int64.compare i 0L < 0 || Int64.compare i (string_length st s) >= 0
       then caml_array_bound_error st
       else (
-        set_byte' st s (to_int i) b;
-        `ok val_unit))
+        set_byte' st s (Int64.to_int_exn i) b;
+        Ok val_unit))
 ;;
 
 let caml_ml_input =
   C4
     (fun st ic s ofs len ->
-      let ofs = Int64.to_int (int_val ofs) in
-      let len = Int64.to_int (int_val len) in
+      let ofs = Int64.to_int_exn (int_val ofs) in
+      let len = Int64.to_int_exn (int_val len) in
       let b = Bytes.create len in
       let ichan = find_chan_in st ic in
       let len = input ichan b 0 len in
       for i = 0 to len - 1 do
         set_byte st s (ofs + i) (Bytes.get b i)
       done;
-      `ok (val_int (Int64.of_int len)))
+      Ok (val_int (Int64.of_int len)))
 ;;
 
 let caml_ml_input_char =
   C1
     (fun st ic ->
       let chan = find_chan_in st ic in
-      let ch = Char.code (input_char chan) in
-      `ok (val_int (of_int ch)))
+      let ch = Char.to_int (input_char chan) in
+      Ok (val_int (Int64.of_int ch)))
 ;;
 
 let caml_ml_input_int =
@@ -448,7 +465,7 @@ let caml_ml_input_int =
     (fun st ic ->
       let chan = find_chan_in st ic in
       let i = input_binary_int chan in
-      `ok (val_int (of_int i)))
+      Ok (val_int (Int64.of_int i)))
 ;;
 
 let caml_input_value =
@@ -460,13 +477,13 @@ let caml_input_value =
       (*let f = open_out ("value.txt" ^ string_of_int !cnt) in
     let () = Trace.root f st.memory p in
     let () = close_out f; incr cnt in*)
-      `ok p)
+      Ok p)
 ;;
 
 let caml_ml_channel_size =
   C1
     (fun st chan ->
-      let x i = `ok (val_int (of_int i)) in
+      let x i = Ok (val_int (Int64.of_int i)) in
       try x (in_channel_length (find_chan_in st chan)) with
       | _ ->
         (try x (out_channel_length (find_chan_out st chan)) with
@@ -479,15 +496,15 @@ let caml_ml_channel_size =
  * let caml_is_printable =
  *   C1
  *     (fun _ c ->
- *       `ok
+ *       Ok
  *         ( if is_printable (Char.chr (to_int (int_val c))) then val_true
  *         else val_false )) *)
 
 let caml_is_printable =
   C1
     (fun _ c ->
-      `ok
-        (if Base.Char.is_print (Char.chr (to_int (int_val c)))
+      Ok
+        (if Char.is_print (Char.of_int_exn (Int64.to_int_exn (int_val c)))
         then val_true
         else val_false))
 ;;
@@ -495,7 +512,7 @@ let caml_is_printable =
 let caml_sys_file_exists =
   C1
     (fun st name ->
-      `ok (if Sys.file_exists (get_obj st name : string) then val_true else val_false))
+      Ok (if Caml.Sys.file_exists (get_obj st name : string) then val_true else val_false))
 ;;
 
 external open_desc : string -> open_flag list -> int -> int = "caml_sys_open"
@@ -505,42 +522,42 @@ let caml_sys_open =
     (fun st fname mode perm ->
       let fname = get_string st fname in
       let mode = (get_obj st mode : open_flag list) in
-      let perm = Int64.to_int (int_val perm) in
+      let perm = Int64.to_int_exn (int_val perm) in
       (*Printf.printf "sys_open %s, mode=%i, perm=%x\n"
       fname (List.length mode) perm;*)
       let fd = open_desc fname mode perm in
-      `ok (val_int (Int64.of_int fd)))
+      Ok (val_int (Int64.of_int fd)))
 ;;
 
 let caml_create_string =
   C1
     (fun st len ->
-      let x = String.make (to_int (int_val len)) (Char.chr 0) in
-      `ok (alloc_block_from st x))
+      let x = String.make (Int64.to_int_exn (int_val len)) (Char.of_int_exn 0) in
+      Ok (alloc_block_from st x))
 ;;
 
 let caml_blit_string =
   C5
     (fun st s1 ofs1 s2 ofs2 n ->
-      let n = to_int (int_val n) in
-      let ofs1 = to_int (int_val ofs1) in
-      let ofs2 = to_int (int_val ofs2) in
+      let n = Int64.to_int_exn (int_val n) in
+      let ofs1 = Int64.to_int_exn (int_val ofs1) in
+      let ofs2 = Int64.to_int_exn (int_val ofs2) in
       for i = 0 to n - 1 do
-        let b = Char.chr @@ to_int @@ get_byte st s1 (ofs1 + i) in
+        let b = Char.of_int_exn @@ Int64.to_int_exn @@ get_byte st s1 (ofs1 + i) in
         set_byte st s2 (ofs2 + i) b
       done;
-      `ok val_unit)
+      Ok val_unit)
 ;;
 
 let caml_fill_string =
   C4
     (fun st s ofs len v ->
-      let ofs = to_int (int_val ofs) in
-      let len = to_int (int_val len) in
+      let ofs = Int64.to_int_exn (int_val ofs) in
+      let len = Int64.to_int_exn (int_val len) in
       for i = 0 to len - 1 do
-        set_byte st s (ofs + i) (Char.chr (to_int (int_val v)))
+        set_byte st s (ofs + i) (Char.of_int_exn (Int64.to_int_exn (int_val v)))
       done;
-      `ok val_unit)
+      Ok val_unit)
 ;;
 
 let string_compare st s1 s2 =
@@ -550,71 +567,73 @@ let string_compare st s1 s2 =
 ;;
 
 let caml_string_equal =
-  C2 (fun st s1 s2 -> `ok (if string_compare st s1 s2 = 0 then val_true else val_false))
+  C2 (fun st s1 s2 -> Ok (if string_compare st s1 s2 = 0 then val_true else val_false))
 ;;
 
 let caml_string_notequal =
-  C2 (fun st s1 s2 -> `ok (if string_compare st s1 s2 <> 0 then val_true else val_false))
+  C2 (fun st s1 s2 -> Ok (if string_compare st s1 s2 <> 0 then val_true else val_false))
 ;;
 
 let caml_string_compare =
-  C2 (fun st s1 s2 -> `ok (val_int (of_int (string_compare st s1 s2))))
+  C2 (fun st s1 s2 -> Ok (val_int (Int64.of_int (string_compare st s1 s2))))
 ;;
 
 let argv = ref ("hardcamlzinc", [| "hardcamlzinc" |])
-let caml_sys_get_argv = C1 (fun st _ -> `ok (alloc_block_from st !argv))
-let caml_sys_get_config = C1 (fun st _ -> `ok (alloc_block_from st ("Unix", 64, false)))
+let caml_sys_get_argv = C1 (fun st _ -> Ok (alloc_block_from st !argv))
+let caml_sys_get_config = C1 (fun st _ -> Ok (alloc_block_from st ("Unix", 64, false)))
 
 let caml_sys_getenv =
   C1
     (fun st v ->
       let v = get_string st v in
-      try `ok (alloc_block_from st (Sys.getenv v)) with
-      | Not_found -> caml_raise_not_found st)
+      match Sys.getenv v with
+      | Some e -> Ok (alloc_block_from st e)
+      | None -> caml_raise_not_found st)
 ;;
 
 let caml_make_vect =
   C2
     (fun st len init ->
       let len = int_val len in
-      if len = 0L
-      then `ok st.atom_table
+      if Int64.equal len 0L
+      then Ok st.atom_table
       else (
         let tag =
-          if is_block init = 1L && tag (header st init) = double_tag
+          if Int64.equal (is_block init) 1L
+             && Int64.equal (tag (header st init)) double_tag
           then double_array_tag
           else 0L
         in
         let p = alloc_block ~st ~size:len ~tag ~colour:white in
-        for i = 0 to to_int len - 1 do
+        for i = 0 to Int64.to_int_exn len - 1 do
           set_field st p i init
         done;
-        `ok p))
+        Ok p))
 ;;
 
 let caml_array_get_addr st a idx =
   let idx = int_val idx in
   let size = size (header st a) in
-  if idx >= size || idx < 0L
+  if Int64.compare idx size >= 0 || Int64.compare idx 0L < 0
   then caml_array_bound_error st
-  else `ok (field st a (to_int idx))
+  else Ok (field st a (Int64.to_int_exn idx))
 ;;
 
 let caml_array_get_float st a idx =
   let idx = int_val idx in
   let size = size (header st a) in
-  if idx >= size || idx < 0L
+  if Int64.compare idx size >= 0 || Int64.compare idx 0L < 0
   then caml_array_bound_error st
   else (
     let p = alloc_block ~st ~size:1L ~colour:white ~tag:double_tag in
-    set_field st p 0 (field st a (to_int idx));
-    `ok p)
+    set_field st p 0 (field st a (Int64.to_int_exn idx));
+    Ok p)
 ;;
 
 let caml_array_get =
   C2
     (fun st a idx ->
-      if tag (header st a) = double_array_tag
+      if Int64.equal (tag (header st a)) double_array_tag
       then caml_array_get_float st a idx
       else caml_array_get_addr st a idx)
 ;;
@@ -622,27 +641,27 @@ let caml_array_get =
 let caml_array_set_addr st a idx v =
   let idx = int_val idx in
   let size = size (header st a) in
-  if idx >= size || idx < 0L
+  if Int64.compare idx size >= 0 || Int64.compare idx 0L < 0
   then caml_array_bound_error st
   else (
-    modify st a (to_int idx) v;
-    `ok val_unit)
+    modify st a (Int64.to_int_exn idx) v;
+    Ok val_unit)
 ;;
 
 let caml_array_set_float st a idx v =
   let idx = int_val idx in
   let size = size (header st a) in
-  if idx >= size || idx < 0L
+  if Int64.compare idx size >= 0 || Int64.compare idx 0L < 0
   then caml_array_bound_error st
   else (
-    set_field st a (to_int idx) (field st v 0);
-    `ok val_unit)
+    set_field st a (Int64.to_int_exn idx) (field st v 0);
+    Ok val_unit)
 ;;
 
 let caml_array_set =
   C3
     (fun st a idx v ->
-      if tag (header st a) = double_array_tag
+      if Int64.equal (tag (header st a)) double_array_tag
       then caml_array_set_float st a idx v
       else caml_array_set_addr st a idx v)
 ;;
@@ -653,24 +672,26 @@ let caml_array_sub =
       let ofs = int_val ofs in
       let len = int_val len in
       let size = size (header st a) in
-      if ofs < 0L || len < 0L || ofs +: len > size
+      if Int64.compare ofs 0L < 0
+         || Int64.compare len 0L < 0
+         || Int64.compare (ofs +: len) size > 0
       then caml_invalid_argument' st "Array.sub"
-      else if len = 0L
-      then `ok st.atom_table
+      else if Int64.equal len 0L
+      then Ok st.atom_table
       else (
         let p = alloc_block ~st ~size:len ~tag:0L ~colour:white in
-        for i = 0 to to_int len - 1 do
-          set_field st p i (field st a (to_int ofs + i))
+        for i = 0 to Int64.to_int_exn len - 1 do
+          set_field st p i (field st a (Int64.to_int_exn ofs + i))
         done;
-        `ok p))
+        Ok p))
 ;;
 
 let caml_array_blit =
   C5
     (fun st src sofs dst dofs len ->
-      let sofs = to_int (int_val sofs) in
-      let dofs = to_int (int_val dofs) in
-      let len = to_int (int_val len) in
+      let sofs = Int64.to_int_exn (int_val sofs) in
+      let dofs = Int64.to_int_exn (int_val dofs) in
+      let len = Int64.to_int_exn (int_val len) in
       if dofs < sofs
       then
         for i = 0 to len - 1 do
@@ -680,7 +701,7 @@ let caml_array_blit =
         for i = len - 1 downto 0 do
           set_field st dst (i + dofs) (field st src (i + sofs))
         done;
-      `ok val_unit)
+      Ok val_unit)
 ;;
 
 let caml_obj_block =
@@ -688,39 +709,39 @@ let caml_obj_block =
     (fun st tag size ->
       let size = int_val size in
       let tag = int_val tag in
-      if size = 0L
-      then `ok (st.atom_table +: aofs tag)
+      if Int64.equal size 0L
+      then Ok (st.atom_table +: aofs tag)
       else (
         let p = alloc_block ~st ~size ~tag ~colour:white in
-        for i = 0 to to_int size - 1 do
+        for i = 0 to Int64.to_int_exn size - 1 do
           set_field st p i (val_int 0L)
         done;
-        `ok p))
+        Ok p))
 ;;
 
 let caml_obj_dup =
   C1
     (fun st obj ->
       let size = size (header st obj) in
-      if size = 0L
-      then `ok obj
+      if Int64.equal size 0L
+      then Ok obj
       else (
         let tag = tag (header st obj) in
         let p = alloc_block ~st ~size ~tag ~colour:white in
-        for i = 0 to to_int size - 1 do
+        for i = 0 to Int64.to_int_exn size - 1 do
           set_field st p i (field st obj i)
         done;
-        `ok p))
+        Ok p))
 ;;
 
 let caml_obj_tag =
   C1
     (fun st obj ->
-      if is_int obj = 1L
-      then `ok (val_int 1000L)
-      else if obj &: 7L <> 0L
-      then `ok (val_int 1002L) (* else if obj < st.heap then `ok (val_int 1001L) *)
-      else `ok (val_int (tag (header st obj))))
+      if Int64.equal (is_int obj) 1L
+      then Ok (val_int 1000L)
+      else if not (Int64.equal (obj &: 7L) 0L)
+      then Ok (val_int 1002L) (* else if obj < st.heap then Ok (val_int 1001L) *)
+      else Ok (val_int (tag (header st obj))))
 ;;
 
 let caml_obj_set_tag =
@@ -728,7 +749,7 @@ let caml_obj_set_tag =
     (fun st arg tag ->
       let hdr = header st arg in
       set_header st arg (hdr &: ~:255L |: int_val tag);
-      `ok val_unit)
+      Ok val_unit)
 ;;
 
 let caml_compare_val st a b =
@@ -742,34 +763,34 @@ let caml_hash =
     (fun st _ _ _ a ->
       let (a : Obj.t) = get_obj st a in
       let x = Hashtbl.hash a in
-      `ok (val_int (of_int x)))
+      Ok (val_int (Int64.of_int x)))
 ;;
 
 (* capture and return possible exceptions *)
-let caml_compare st a b = `ok (val_int (of_int (caml_compare_val st a b)))
+let caml_compare st a b = Ok (val_int (Int64.of_int (caml_compare_val st a b)))
 
 let caml_equal st a b =
-  `ok (val_int (of_int (if caml_compare_val st a b = 0 then 1 else 0)))
+  Ok (val_int (Int64.of_int (if caml_compare_val st a b = 0 then 1 else 0)))
 ;;
 
 let caml_notequal st a b =
-  `ok (val_int (of_int (if caml_compare_val st a b <> 0 then 1 else 0)))
+  Ok (val_int (Int64.of_int (if caml_compare_val st a b <> 0 then 1 else 0)))
 ;;
 
 let caml_lessthan st a b =
-  `ok (val_int (of_int (if caml_compare_val st a b < 0 then 1 else 0)))
+  Ok (val_int (Int64.of_int (if caml_compare_val st a b < 0 then 1 else 0)))
 ;;
 
 let caml_lessequal st a b =
-  `ok (val_int (of_int (if caml_compare_val st a b <= 0 then 1 else 0)))
+  Ok (val_int (Int64.of_int (if caml_compare_val st a b <= 0 then 1 else 0)))
 ;;
 
 let caml_greaterthan st a b =
-  `ok (val_int (of_int (if caml_compare_val st a b > 0 then 1 else 0)))
+  Ok (val_int (Int64.of_int (if caml_compare_val st a b > 0 then 1 else 0)))
 ;;
 
 let caml_greaterequal st a b =
-  `ok (val_int (of_int (if caml_compare_val st a b >= 0 then 1 else 0)))
+  Ok (val_int (Int64.of_int (if caml_compare_val st a b >= 0 then 1 else 0)))
 ;;
 
 let caml_weak_list_head = ref 0L
@@ -779,19 +800,19 @@ let caml_weak_create =
   C1
     (fun st len ->
       let size = int_val len +: 1L in
-      if size <= 0L (*|| size > max_wosize*)
+      if Int64.compare size 0L <= 0 (*|| size > max_wosize*)
       then caml_invalid_argument' st "Weak.create"
       else (
         let p = alloc_block ~st ~size ~colour:white ~tag:abstract_tag in
         set_field st p 0 !caml_weak_list_head;
         caml_weak_list_head := p;
-        for i = 1 to to_int size - 1 do
+        for i = 1 to Int64.to_int_exn size - 1 do
           set_field st p i caml_weak_none
         done;
-        `ok p))
+        Ok p))
 ;;
 
-let caml_dynlink_get_current_libs = C1 (fun st _ -> `ok st.atom_table)
+let caml_dynlink_get_current_libs = C1 (fun st _ -> Ok st.atom_table)
 
 external format_int : string -> int -> string = "caml_format_int"
 
@@ -799,7 +820,7 @@ let caml_format_int =
   C2
     (fun st fmt arg ->
       let s = format_int (get_obj st fmt : string) (get_obj st arg : int) in
-      `ok (alloc_block_from st s))
+      Ok (alloc_block_from st s))
 ;;
 
 let update_fields : state -> int64 -> 'a -> unit =
@@ -850,17 +871,17 @@ let caml_lex_engine' lex_engine =
     (fun st tab start buf ->
       let tab' = (get_obj st tab : Lexing.lex_tables) in
       (* might be worth cacheing this? *)
-      let start = to_int (int_val start) in
+      let start = Int64.to_int_exn (int_val start) in
       let buf' = (get_obj ~closure:false st buf : Lexing.lexbuf) in
       let res = lex_engine tab' start buf' in
       update_fields st (field st buf 1) buf'.Lexing.lex_buffer;
-      set_field st buf 4 (val_int (of_int buf'.Lexing.lex_start_pos));
-      set_field st buf 5 (val_int (of_int buf'.Lexing.lex_curr_pos));
-      set_field st buf 6 (val_int (of_int buf'.Lexing.lex_last_pos));
-      set_field st buf 7 (val_int (of_int buf'.Lexing.lex_last_action));
+      set_field st buf 4 (val_int (Int64.of_int buf'.Lexing.lex_start_pos));
+      set_field st buf 5 (val_int (Int64.of_int buf'.Lexing.lex_curr_pos));
+      set_field st buf 6 (val_int (Int64.of_int buf'.Lexing.lex_last_pos));
+      set_field st buf 7 (val_int (Int64.of_int buf'.Lexing.lex_last_action));
       set_field st buf 8 (if buf'.Lexing.lex_eof_reached then val_true else val_false);
       update_fields st (field st buf 9) buf'.Lexing.lex_mem;
-      `ok (val_int (of_int res)))
+      Ok (val_int (Int64.of_int res)))
 ;;
 
 let caml_lex_engine = caml_lex_engine' lex_c_engine
@@ -925,16 +946,16 @@ let caml_parse_engine =
       update_fields st (field st env 1) env'.v_stack;
       update_fields st (field st env 2) env'.symb_start_stack;
       update_fields st (field st env 3) env'.symb_end_stack;
-      set_field st env 6 (val_int (of_int env'.curr_char));
+      set_field st env 6 (val_int (Int64.of_int env'.curr_char));
       set_field st env 7 (alloc_block_from st env'.lval);
       (* I think this is code... *)
-      set_field st env 10 (val_int (of_int env'.asp));
-      set_field st env 11 (val_int (of_int env'.rule_len));
-      set_field st env 12 (val_int (of_int env'.rule_number));
-      set_field st env 13 (val_int (of_int env'.sp));
-      set_field st env 14 (val_int (of_int env'.state));
-      set_field st env 15 (val_int (of_int env'.errflag));
-      `ok (val_int (of_int res)))
+      set_field st env 10 (val_int (Int64.of_int env'.asp));
+      set_field st env 11 (val_int (Int64.of_int env'.rule_len));
+      set_field st env 12 (val_int (Int64.of_int env'.rule_number));
+      set_field st env 13 (val_int (Int64.of_int env'.sp));
+      set_field st env 14 (val_int (Int64.of_int env'.state));
+      set_field st env 15 (val_int (Int64.of_int env'.errflag));
+      Ok (val_int (Int64.of_int res)))
 ;;
 
 module type Int = sig
@@ -976,24 +997,24 @@ module type Int = sig
 end
 
 module Nativeint_c_ops = struct
-  include Nativeint
+  include Caml.Nativeint
 
   let name = "nativeint"
-  let to_t = Int64.to_nativeint
+  let to_t = Int64.to_nativeint_exn
 end
 
 module Int64_c_ops = struct
-  include Nativeint
+  include Caml.Nativeint
 
   let name = "nativeint"
-  let to_t = Int64.to_nativeint
+  let to_t = Int64.to_nativeint_exn
 end
 
 module Int32_c_ops = struct
-  include Nativeint
+  include Caml.Nativeint
 
   let name = "nativeint"
-  let to_t = Int64.to_nativeint
+  let to_t = Int64.to_nativeint_exn
 end
 
 module Int_c_calls (I : Int) = struct
@@ -1005,7 +1026,7 @@ module Int_c_calls (I : Int) = struct
         set_field st p 0 0L;
         (* XXX should point to custom allocation block... *)
         set_field st p 1 (Repr.int64_of_obj Obj.(field (repr c) 1));
-        `ok p)
+        Ok p)
   ;;
 
   let op1 f =
@@ -1016,18 +1037,18 @@ module Int_c_calls (I : Int) = struct
         set_field st p 0 0L;
         (* XXX should point to custom allocation block... *)
         set_field st p 1 (Repr.int64_of_obj Obj.(field (repr c) 1));
-        `ok p)
+        Ok p)
   ;;
 
   let sftop f =
     C2
       (fun st a b ->
         let p = alloc_block ~st ~size:2L ~tag:custom_tag ~colour:white in
-        let c = f (I.to_t a) (to_int (int_val b)) in
+        let c = f (I.to_t a) (Int64.to_int_exn (int_val b)) in
         set_field st p 0 0L;
         (* XXX should point to custom allocation block... *)
         set_field st p 1 (Repr.int64_of_obj Obj.(field (repr c) 1));
-        `ok p)
+        Ok p)
   ;;
 
   let c_calls =
@@ -1136,14 +1157,13 @@ let c_calls =
 ;;
 
 let run bc prim st =
-  let arg ofs = st.memory.{(to_int st.sp / 8) + ofs} in
-  match List.assoc bc.Load.prim.(prim) c_calls with
-  | C1 f -> f st st.accu
-  | C2 f -> f st st.accu (arg 1)
-  | C3 f -> f st st.accu (arg 1) (arg 2)
-  | C4 f -> f st st.accu (arg 1) (arg 2) (arg 3)
-  | C5 f -> f st st.accu (arg 1) (arg 2) (arg 3) (arg 4)
-  | CN -> failwith "C_CALLN not yet implemented"
-  | exception Not_found -> failwith ("C primitive " ^ bc.Load.prim.(prim) ^ " not found")
-  | exception _ -> failwith "C primitive error"
+  let arg ofs = st.memory.{(Int64.to_int_exn st.sp / 8) + ofs} in
+  match List.Assoc.find ~equal:String.equal c_calls bc.Load.prim.(prim) with
+  | Some (C1 f) -> f st st.accu
+  | Some (C2 f) -> f st st.accu (arg 1)
+  | Some (C3 f) -> f st st.accu (arg 1) (arg 2)
+  | Some (C4 f) -> f st st.accu (arg 1) (arg 2) (arg 3)
+  | Some (C5 f) -> f st st.accu (arg 1) (arg 2) (arg 3) (arg 4)
+  | Some CN -> failwith "C_CALLN not yet implemented"
+  | None -> failwith ("C primitive " ^ bc.Load.prim.(prim) ^ " not found")
 ;;

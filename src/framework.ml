@@ -117,8 +117,8 @@ module Interp = struct
     in
     let st = setup_for_c_call st in
     match C_runtime.run st.exe prim st with
-    | `ok v -> Some (restore_after_c_call st v)
-    | `exn v -> do_exception st v
+    | Ok v -> Some (restore_after_c_call st v)
+    | Error v -> do_exception st v
   ;;
 
   let get_instr memory pc =
