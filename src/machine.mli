@@ -10,49 +10,50 @@ type machine_register =
     `global_data
   | `atom_table
   | `alloc_base
-  | `stack_high ]
+  | `stack_high
+  ]
 [@@deriving sexp_of, enumerate, variants]
 
-type cache = [ `stack | `program | `mem ]
+type cache =
+  [ `stack
+  | `program
+  | `mem
+  ]
 [@@deriving sexp_of, enumerate, variants]
 
-type memory_mapping = {
-  code_address : int;
-  code_size : int;
-  atoms_address : int;
-  globals_address : int;
-  c_heap_address : int;
-  c_heap_size : int;
-  heap_address : int;
-  stack_address : int;
-}
+type memory_mapping =
+  { code_address : int
+  ; code_size : int
+  ; atoms_address : int
+  ; globals_address : int
+  ; c_heap_address : int
+  ; c_heap_size : int
+  ; heap_address : int
+  ; stack_address : int
+  }
 
-type state = {
-  (* zinc registers *)
-  accu : int64;
-  env : int64;
-  pc : int64;
-  sp : int64;
-  extra_args : int64;
-  trapsp : int64;
-  (* other state *)
-  global_data : int64;
-  atom_table : int64;
-  alloc_base : int64;
-  stack_high : int64;
-  (* memory *)
-  memory : Repr.memory;
-  (* executable *)
-  exe : Load.bytecode_exe;
-  mapping : memory_mapping;
-}
+type state =
+  { (* zinc registers *)
+    accu : int64
+  ; env : int64
+  ; pc : int64
+  ; sp : int64
+  ; extra_args : int64
+  ; trapsp : int64
+  ; (* other state *)
+    global_data : int64
+  ; atom_table : int64
+  ; alloc_base : int64
+  ; stack_high : int64
+  ; (* memory *)
+    memory : Repr.memory
+  ; (* executable *)
+    exe : Load.bytecode_exe
+  ; mapping : memory_mapping
+  }
 
 val empty : state
-
 val string_of_mach_reg : machine_register -> string
-
 val string_of_cache : cache -> string
-
 val num_machine_registers : int
-
 val num_cache_spaces : int

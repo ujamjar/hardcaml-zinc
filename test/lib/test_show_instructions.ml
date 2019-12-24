@@ -4,15 +4,17 @@ open Hardcaml_zinc
 open Zinc2
 
 let show instr =
-  try S.print @@ Compile.simplify @@ snd @@ O.dispatch instr S.empty
-  with _ -> printf "NOT IMPLEMENTED\n"
+  try S.print @@ Compile.simplify @@ snd @@ O.dispatch instr S.empty with
+  | _ -> printf "NOT IMPLEMENTED\n"
+;;
 
 let%expect_test "show all instruction implementations" =
   List.iter Opcode.all ~f:(fun opcode ->
       printf "____ %s ____\n\n" (Opcode.to_string opcode);
       show opcode;
       printf "\n");
-  [%expect {|
+  [%expect
+    {|
     ____ ACC0 ____
 
     _0 = sp;
@@ -1796,3 +1798,4 @@ let%expect_test "show all instruction implementations" =
     ____ RAISE_NOTRACE ____
 
     NOT IMPLEMENTED |}]
+;;

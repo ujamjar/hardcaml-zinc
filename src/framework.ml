@@ -10,10 +10,11 @@ let init_memory bc memory_size_words =
   let code_address = 0 in
   let exe i =
     let a, b =
-      ( of_int32 bc.code.(i * 2),
-        try of_int32 bc.code.((i * 2) + 1) with _ -> 0L )
+      ( of_int32 bc.code.(i * 2)
+      , try of_int32 bc.code.((i * 2) + 1) with
+        | _ -> 0L )
     in
-    let a, b = (logand a 0xFFFFFFFFL, logand b 0xFFFFFFFFL) in
+    let a, b = logand a 0xFFFFFFFFL, logand b 0xFFFFFFFFL in
     logor a (shift_left b 32)
   in
   (* atoms table *)
@@ -28,45 +29,48 @@ let init_memory bc memory_size_words =
   let memory = Bigarray.(Array1.create int64 c_layout memory_size_words) in
   let () =
     for i = 0 to memory_size_words - 1 do
-      memory.{i} <-
-        ( if i < code_size then exe i
-        else if i < globals_address then atom (i - code_size)
-        else if i < c_heap_address then globals.(i - globals_address)
-        else 0L )
+      memory.{i}
+        <- (if i < code_size
+           then exe i
+           else if i < globals_address
+           then atom (i - code_size)
+           else if i < c_heap_address
+           then globals.(i - globals_address)
+           else 0L)
     done
   in
   let stack_address = memory_size_words in
   (* init the c-heap *)
   let () = C_runtime.init (c_heap_address * 8) c_heap_size_bytes in
-  ( {
-      code_address = code_address * 8;
-      code_size = Array.length bc.code * 4;
-      atoms_address = atoms_address * 8;
-      globals_address = globals_address * 8;
-      c_heap_address = c_heap_address * 8;
-      c_heap_size = c_heap_size_bytes;
-      heap_address = heap_address * 8;
-      stack_address = stack_address * 8;
-    },
-    memory )
+  ( { code_address = code_address * 8
+    ; code_size = Array.length bc.code * 4
+    ; atoms_address = atoms_address * 8
+    ; globals_address = globals_address * 8
+    ; c_heap_address = c_heap_address * 8
+    ; c_heap_size = c_heap_size_bytes
+    ; heap_address = heap_address * 8
+    ; stack_address = stack_address * 8
+    }
+  , memory )
+;;
 
 let init_state mm memory bytecode =
   Machine.
-    {
-      pc = Int64.of_int mm.code_address;
-      sp = Int64.of_int mm.stack_address;
-      accu = 1L;
-      env = Int64.of_int (mm.atoms_address + 8);
-      extra_args = 0L;
-      trapsp = Int64.of_int mm.stack_address;
-      global_data = Int64.of_int (mm.globals_address + 8);
-      atom_table = Int64.of_int (mm.atoms_address + 8);
-      alloc_base = Int64.of_int mm.heap_address;
-      stack_high = Int64.of_int mm.stack_address;
-      memory;
-      exe = bytecode;
-      mapping = mm;
+    { pc = Int64.of_int mm.code_address
+    ; sp = Int64.of_int mm.stack_address
+    ; accu = 1L
+    ; env = Int64.of_int (mm.atoms_address + 8)
+    ; extra_args = 0L
+    ; trapsp = Int64.of_int mm.stack_address
+    ; global_data = Int64.of_int (mm.globals_address + 8)
+    ; atom_table = Int64.of_int (mm.atoms_address + 8)
+    ; alloc_base = Int64.of_int mm.heap_address
+    ; stack_high = Int64.of_int mm.stack_address
+    ; memory
+    ; exe = bytecode
+    ; mapping = mm
     }
+;;
 
 module Interp = struct
   open Machine
@@ -83,10 +87,11 @@ module Interp = struct
 
   let init ~prog ~argv ~memsize_kb =
     let bytecode = Load.bytecode_exe prog in
-    C_runtime.argv := (prog, argv);
+    C_runtime.argv := prog, argv;
     let mapping, memory = init_memory bytecode (memsize_kb * (1024 / 8)) in
     let state = init_state mapping memory bytecode in
     state
+  ;;
 
   let do_c_call st nargs prim =
     let open Ops.Int64 in
@@ -100,11 +105,10 @@ module Interp = struct
       st
     in
     let restore_after_c_call st v =
-      {
-        st with
-        env = st.memory.{to_int st.sp / 8};
-        sp = st.sp +: (nargs *: 8L);
-        accu = v;
+      { st with
+        env = st.memory.{to_int st.sp / 8}
+      ; sp = st.sp +: (nargs *: 8L)
+      ; accu = v
       }
     in
     let do_exception st v =
@@ -115,10 +119,12 @@ module Interp = struct
     match C_runtime.run st.exe prim st with
     | `ok v -> Some (restore_after_c_call st v)
     | `exn v -> do_exception st v
+  ;;
 
   let get_instr memory pc =
     let instr = memory.{pc / 2} in
     S.(sra (if pc mod 2 = 0 then sll instr 32L else instr) 32L)
+  ;;
 
   let step ?(trace = 0) st =
     (* fetch instruction *)
@@ -136,6 +142,7 @@ module Interp = struct
     | `step -> Some st
     | `stop -> None
     | `c_call (nargs, prim) -> do_c_call st nargs prim
+  ;;
 
   let interactive ~prog ~argv ~memsize_kb =
     let state = ref (init ~prog ~argv ~memsize_kb) in
@@ -143,18 +150,20 @@ module Interp = struct
     let ninstrs = ref 0 in
     object (this)
       method step =
-        if !running then (
+        if !running
+        then (
           incr ninstrs;
           match step !state with
           | Some st -> state := st
-          | None -> running := false )
+          | None -> running := false)
 
       method steps n =
         let rec f m =
-          if n <= 0 || m >= n then ()
+          if n <= 0 || m >= n
+          then ()
           else (
             this#step;
-            f (m + 1) )
+            f (m + 1))
         in
         f 0
 
@@ -167,21 +176,23 @@ module Interp = struct
         this#ninstrs
 
       method stepsd n =
-        if n > 0 then (
+        if n > 0
+        then (
           this#steps (n - 1);
           this#trace#instr;
           this#trace#machine;
           this#step;
-          this#ninstrs )
+          this#ninstrs)
         else this#ninstrs
 
       method steptod n =
-        if n > this#ninstrs then (
+        if n > this#ninstrs
+        then (
           this#stepto (n - 1);
           this#trace#instr;
           this#trace#machine;
           this#step;
-          this#ninstrs )
+          this#ninstrs)
         else this#ninstrs
 
       method state = !state
@@ -203,4 +214,5 @@ module Interp = struct
           method root v = Trace.root !state v
         end
     end
+  ;;
 end

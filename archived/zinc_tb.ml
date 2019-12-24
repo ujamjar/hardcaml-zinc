@@ -3,26 +3,22 @@ open Hardcaml
 module Waveform = Hardcaml_waveterm.Waveform
 module Z = Cyclesim.With_interface (Zinc.I) (Zinc.O)
 
-type cfg = {
-  waves : bool;
-  instr_trace : bool;
-  state_trace : bool;
-  mem_trace : bool;
-}
+type cfg =
+  { waves : bool
+  ; instr_trace : bool
+  ; state_trace : bool
+  ; mem_trace : bool
+  }
 
 let make cfg exe =
   let mem_size_words = 1024 * 1024 in
-
   let _show_instr =
-    let ins =
-      Base.List.map Opcode.all ~f:Opcode.to_string |> Base.Array.of_list
-    in
-
+    let ins = Base.List.map Opcode.all ~f:Opcode.to_string |> Base.Array.of_list in
     fun x ->
       let i = Bits.to_int x in
-      try ins.(i) with _ -> ""
+      try ins.(i) with
+      | _ -> ""
   in
-
   (* let wave_cfg =
    *   let f = function
    *     | n, b -> if b = 1 then (n, Waveterm_waves.B) else (n, Waveterm_waves.H)
@@ -46,12 +42,12 @@ let make cfg exe =
    * in *)
   let sim = Z.create Zinc.zinc in
   let waves, sim =
-    if cfg.waves then
+    if cfg.waves
+    then (
       let waves, sim = Waveform.create sim in
-      (Some waves, sim)
-    else (None, sim)
+      Some waves, sim)
+    else None, sim
   in
-
   let open Zinc.Memory.I in
   let open Zinc.Memory.O in
   let open Zinc.I in
@@ -66,32 +62,25 @@ let make cfg exe =
   in
   let o = Zinc.O.map (Cyclesim.outputs sim) ~f:(fun o () -> Bits.to_int !o) in
   let n =
-    Zinc.O.map (Cyclesim.outputs ~clock_edge:After sim) ~f:(fun o () ->
-        Bits.to_int !o)
+    Zinc.O.map (Cyclesim.outputs ~clock_edge:After sim) ~f:(fun o () -> Bits.to_int !o)
   in
   let n64 =
-    Zinc.O.map (Cyclesim.outputs ~clock_edge:After sim) ~f:(fun o () ->
-        Bits.to_int64 !o)
+    Zinc.O.map (Cyclesim.outputs ~clock_edge:After sim) ~f:(fun o () -> Bits.to_int64 !o)
   in
   let o64 =
-    Zinc.O.map (Cyclesim.outputs sim) ~f:(fun o () ->
-        Bits.to_int !o |> Int64.of_int)
+    Zinc.O.map (Cyclesim.outputs sim) ~f:(fun o () -> Bits.to_int !o |> Int64.of_int)
   in
-
   let mapping, memory = init_memory exe mem_size_words in
-
   let trace () =
     Trace.machine
-      {
-        Machine.empty with
-        memory;
-        mapping;
-        env = o64.env ();
-        sp = o64.sp ();
-        accu = o64.sp ();
+      { Machine.empty with
+        memory
+      ; mapping
+      ; env = o64.env ()
+      ; sp = o64.sp ()
+      ; accu = o64.sp ()
       }
   in
-
   Cyclesim.reset sim;
   i.bytecode_start_address mapping.code_address;
   i.atom_table_address (mapping.atoms_address + 8);
@@ -99,82 +88,96 @@ let make cfg exe =
   i.heap_start_address mapping.heap_address;
   i.stack_start_address mapping.stack_address;
   i.start 1;
-
   let log_mem_access cycle rw addr data sp =
-    if cfg.mem_trace then
+    if cfg.mem_trace
+    then (
       let offs, typ =
-        if addr < mapping.atoms_address then ((addr - 0) * 2, "BYTE")
-        else if addr < mapping.globals_address then
-          (addr - mapping.atoms_address, "ATOM")
-        else if addr < mapping.heap_address then
-          (addr - mapping.globals_address, "GLBL")
-        else if addr >= sp - 8 then (mapping.stack_address - addr - 1, "STCK")
-        else (addr - mapping.heap_address, "HEAP")
+        if addr < mapping.atoms_address
+        then (addr - 0) * 2, "BYTE"
+        else if addr < mapping.globals_address
+        then addr - mapping.atoms_address, "ATOM"
+        else if addr < mapping.heap_address
+        then addr - mapping.globals_address, "GLBL"
+        else if addr >= sp - 8
+        then mapping.stack_address - addr - 1, "STCK"
+        else addr - mapping.heap_address, "HEAP"
       in
-      printf "[%-8i] %s %s @[%.8x | %.8x] = %.16Lx [sp=%i]\n" cycle
+      printf
+        "[%-8i] %s %s @[%.8x | %.8x] = %.16Lx [sp=%i]\n"
+        cycle
         (if rw = 0 then "R" else "W")
-        typ addr offs data sp
+        typ
+        addr
+        offs
+        data
+        sp)
   in
-
   let run () =
     let cycle = ref 0 in
     let stop = ref false in
     let instr_no = ref 1 in
     while (not !stop) && o.error () <> 1 do
       (* instruction trace *)
-      if o.state () = 2 then (
+      if o.state () = 2
+      then (
         try
           if cfg.state_trace then printf "\n##%i\n" !instr_no;
           incr instr_no;
-          if cfg.instr_trace then
-            printf "%6i  %s\n%!"
+          if cfg.instr_trace
+          then
+            printf
+              "%6i  %s\n%!"
               ((o.pc () / 4) - 1)
               (o.instruction () |> Opcode.of_int |> Opcode.to_string);
           if cfg.state_trace then trace ()
-        with _ ->
+        with
+        | _ ->
           stop := true;
-          printf "      INVALID\n%!" );
+          printf "      INVALID\n%!");
       Cyclesim.cycle sim;
       (* memory accesses *)
       i.memory_i.memory_ready 0;
-      if n.memory_o.memory_request () <> 0 then (
+      if n.memory_o.memory_request () <> 0
+      then (
         let addr = n.memory_o.memory_address () in
         let rw = n.memory_o.memory_read_write () in
         let sp = o.sp () in
-        ( if rw = 0 then (
+        if rw = 0
+        then (
           (* read *)
           let data = memory.{addr lsr 3} in
           log_mem_access !cycle rw addr data sp;
-          i64.memory_i.memory_data_in data )
-        else
+          i64.memory_i.memory_data_in data)
+        else (
           (* write *)
           let data = n64.memory_o.memory_data_out () in
           log_mem_access !cycle rw addr data sp;
-          memory.{addr lsr 3} <- data );
-        i.memory_i.memory_ready 1 );
+          memory.{addr lsr 3} <- data);
+        i.memory_i.memory_ready 1);
       (* c-calls *)
       i.c_call_ready 0;
-      if n.c_call_request () = 1 then (
+      if n.c_call_request () = 1
+      then (
         let prim = n.c_call_prim () in
-        if cfg.instr_trace then
-          Printf.printf "c_call_request: [%i]%s\n" prim exe.Load.prim.(prim);
+        if cfg.instr_trace
+        then Printf.printf "c_call_request: [%i]%s\n" prim exe.Load.prim.(prim);
         let value =
           match
-            C_runtime.run exe prim
-              {
-                Machine.empty with
-                Machine.env = o64.env ();
-                accu = o64.accu ();
-                sp = o64.sp ();
-                memory;
+            C_runtime.run
+              exe
+              prim
+              { Machine.empty with
+                Machine.env = o64.env ()
+              ; accu = o64.accu ()
+              ; sp = o64.sp ()
+              ; memory
               }
           with
           | `ok v -> v
           | `exn _ -> failwith "c-call exn not implemented"
         in
         i64.c_call_result value;
-        i.c_call_ready 1 );
-
+        i.c_call_ready 1);
       i.start 0;
       incr cycle
     done
@@ -184,7 +187,7 @@ let make cfg exe =
     | Failure x -> printf "\n\nEXN: %s\n\n%!" x
     | _ -> printf "\n\nEXN %s\n\n%!" (Printexc.get_backtrace ())
   in
-
   match waves with
   | None -> ()
   | Some waves -> Hardcaml_waveterm_interactive.run waves
+;;

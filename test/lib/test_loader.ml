@@ -6,7 +6,8 @@ open Expect_test_helpers_kernel
 let%expect_test "load helloworld" =
   let bc = Load.bytecode_exe "../examples/helloworld.bc" in
   print_s [%message "Bytecode executable" (bc : Load.bytecode_exe)];
-  [%expect{|
+  [%expect
+    {|
     ("Bytecode executable" (
       bc (
         (toc (
@@ -486,3 +487,4 @@ let%expect_test "load helloworld" =
           caml_weak_set))
         (data
          "\132\149\166\190\000\000\002H\000\000\000B\000\000\001&\000\000\000\239\b\000\000\196\000\b\000\000\b\248-Out_of_memory\000\255\b\000\000\b\248)Sys_error\000\254\b\000\000\b\248'Failure\000\253\b\000\000\b\2480Invalid_argument\000\252\b\000\000\b\248+End_of_file\000\251\b\000\000\b\2480Division_by_zero\000\250\b\000\000\b\248)Not_found\000\249\b\000\000\b\248-Match_failure\000\248\b\000\000\b\248.Stack_overflow\000\247\b\000\000\b\248.Sys_blocked_io\000\246\b\000\000\b\248.Assert_failure\000\245\b\000\000\b\248:Undefined_recursive_module\000\244@\"%,,really_input%input\160@\160F@\160@\160G@0output_substring&output\160A\160C\160D\160F@\160A\160C\160D\160G@%%.12g!.\"%d%false$true\144A\144@%false$true.bool_of_string$true%false+char_of_int3index out of bounds<Pervasives.array_bound_error+Stdlib.Exit\025_j\000\127\240\000\000\000\000\000\000\025_j\000\255\240\000\000\000\000\000\000\025_j\000\127\240\000\000\000\000\000\001\025_j\000\127\239\255\255\255\255\255\255\025_j\000\000\016\000\000\000\000\000\000\025_j\000<\176\000\000\000\000\000\0005Pervasives.do_at_exit@,Hello world!@@")))) |}]
+;;

@@ -4,23 +4,26 @@ open HardCamlZinc
 
 let mk_exe code = { Load.empty with Load.code = Instr.to_array code }
 
-let run code = Framework.Testbench.make
-  Framework.Testbench.{ waves=true; instr_trace=true; state_trace=true; mem_trace=true }
-  (mk_exe code)
+let run code =
+  Framework.Testbench.make
+    Framework.Testbench.
+      { waves = true; instr_trace = true; state_trace = true; mem_trace = true }
+    (mk_exe code)
+;;
 
-let () = 
+let () =
   let open Instr in
-  run [
-    const3;
-    push;
-    const1;
-    pushacc0;
-    constint 25l;
-    pushacc 0l;
-    pushconst2;
-    push;
-    constint 139l;
-    pushacc1;
-    stop;
-  ]
-
+  run
+    [ const3
+    ; push
+    ; const1
+    ; pushacc0
+    ; constint 25l
+    ; pushacc 0l
+    ; pushconst2
+    ; push
+    ; constint 139l
+    ; pushacc1
+    ; stop
+    ]
+;;

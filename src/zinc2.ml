@@ -17,15 +17,10 @@ module Compile = struct
   open Interp
 
   let initr x = Array.init Machine.num_machine_registers (fun _ -> x)
-
   let getr a i = a.(Machine.Variants_of_machine_register.to_rank i)
-
   let setr a i v = a.(Machine.Variants_of_machine_register.to_rank i) <- v
-
   let initc x = Array.init Machine.num_cache_spaces (fun _ -> x)
-
   let getc a i = a.(Machine.Variants_of_cache.to_rank i)
-
   let setc a i v = a.(Machine.Variants_of_cache.to_rank i) <- v
 
   (* schedule the instructions according to dependancies.
@@ -36,17 +31,26 @@ module Compile = struct
 
    *)
 
-  let expr_is_const = function Const _ -> true | _ -> false
+  let expr_is_const = function
+    | Const _ -> true
+    | _ -> false
+  ;;
 
   let expr_val = function
     | Const n -> n
     | _ -> failwith "expr is not a constant"
+  ;;
 
-  let expr_is e n = match e with Const m when n = m -> true | _ -> false
+  let expr_is e n =
+    match e with
+    | Const m when n = m -> true
+    | _ -> false
+  ;;
 
   let const_eval op e0 e1 =
-    if expr_is_const e0 && expr_is_const e1 then
-      let e0, e1 = (expr_val e0, expr_val e1) in
+    if expr_is_const e0 && expr_is_const e1
+    then (
+      let e0, e1 = expr_val e0, expr_val e1 in
       match op with
       | "+" -> Some (Const (e0 + e1))
       | "-" -> Some (Const (e0 - e1))
@@ -62,35 +66,38 @@ module Compile = struct
       | ">>+" -> Some (Const (e0 asr e1))
       | "==" -> Some (Const (if e0 = e1 then 1 else 0))
       | "<>" -> Some (Const (if e0 <> e1 then 1 else 0))
-      | _ -> None
+      | _ -> None)
     else None
+  ;;
 
   let rec simplify_expr e =
     match e with
-    | Op (op, e0, e1) -> (
-        let e0, e1 = (simplify_expr e0, simplify_expr e1) in
-        match const_eval op e0 e1 with
-        | Some e -> e
-        | None -> (
-            match op with
-            | "+" when expr_is e0 0 -> e1 (* a + 0 = a *)
-            | "+" when expr_is e1 0 -> e0 (* 0 + a = a *)
-            | "-" when expr_is e1 0 -> e0 (* a - 0 = a *)
-            | "*" when expr_is e1 1 -> e0 (* a * 1 = a *)
-            | "*" when expr_is e0 1 -> e1 (* 1 * a = a *)
-            | "/" when expr_is e1 1 -> e0 (* a / 1 = a *)
-            | "<<" when expr_is e1 0 -> e1 (* a lsl 0 = a *)
-            | ">>" when expr_is e1 0 -> e1 (* a lsr 0 = a *)
-            | ">>+" when expr_is e1 0 -> e1 (* a asr 0 = a *)
-            | _ -> Op (op, e0, e1) ) )
+    | Op (op, e0, e1) ->
+      let e0, e1 = simplify_expr e0, simplify_expr e1 in
+      (match const_eval op e0 e1 with
+      | Some e -> e
+      | None ->
+        (match op with
+        | "+" when expr_is e0 0 -> e1 (* a + 0 = a *)
+        | "+" when expr_is e1 0 -> e0 (* 0 + a = a *)
+        | "-" when expr_is e1 0 -> e0 (* a - 0 = a *)
+        | "*" when expr_is e1 1 -> e0 (* a * 1 = a *)
+        | "*" when expr_is e0 1 -> e1 (* 1 * a = a *)
+        | "/" when expr_is e1 1 -> e0 (* a / 1 = a *)
+        | "<<" when expr_is e1 0 -> e1 (* a lsl 0 = a *)
+        | ">>" when expr_is e1 0 -> e1 (* a lsr 0 = a *)
+        | ">>+" when expr_is e1 0 -> e1 (* a asr 0 = a *)
+        | _ -> Op (op, e0, e1)))
     | Const _ -> e
     | Val _ -> e
+  ;;
 
   let rec expr_deps e =
     match e with
     | Op (_, e0, e1) -> expr_deps e0 @ expr_deps e1
     | Val id -> [ id ]
     | Const _ -> []
+  ;;
 
   let rec stat_deps x =
     match x with
@@ -98,21 +105,19 @@ module Compile = struct
     | Set_reg (_, value) -> `cmd (x, expr_deps value)
     | Get_mem (_, _, addr) -> `cmd (x, expr_deps addr)
     | Set_mem (_, addr, value) -> `cmd (x, expr_deps addr @ expr_deps value)
-    | Cond (c, t, f) ->
-        `cond (x, expr_deps c, List.map stat_deps t, List.map stat_deps f)
-    | Iter (_, _, f, t, c) ->
-        `iter (x, expr_deps f @ expr_deps t, List.map stat_deps c)
+    | Cond (c, t, f) -> `cond (x, expr_deps c, List.map stat_deps t, List.map stat_deps f)
+    | Iter (_, _, f, t, c) -> `iter (x, expr_deps f @ expr_deps t, List.map stat_deps c)
+  ;;
 
   let rec simplify_stat = function
     | Get_reg (id, reg) -> Get_reg (id, reg)
     | Set_reg (reg, value) -> Set_reg (reg, simplify_expr value)
     | Get_mem (id, cache, addr) -> Get_mem (id, cache, simplify_expr addr)
     | Set_mem (cache, addr, value) ->
-        Set_mem (cache, simplify_expr addr, simplify_expr value)
-    | Cond (c, t, f) ->
-        Cond (simplify_expr c, simplify_stats t, simplify_stats f)
+      Set_mem (cache, simplify_expr addr, simplify_expr value)
+    | Cond (c, t, f) -> Cond (simplify_expr c, simplify_stats t, simplify_stats f)
     | Iter (ud, id, f, t, c) ->
-        Iter (ud, id, simplify_expr f, simplify_expr t, simplify_stats c)
+      Iter (ud, id, simplify_expr f, simplify_expr t, simplify_stats c)
 
   and simplify_stats x = List.map simplify_stat x
 
@@ -188,30 +193,32 @@ module Compile = struct
   open Hardcaml
   open Signal
 
-  type env = { id_to_wire : t M.t; regs : t array }
+  type env =
+    { id_to_wire : t M.t
+    ; regs : t array
+    }
 
   let dbits = 64 (* XXX *)
 
   let init_env () =
-    {
-      id_to_wire = M.empty;
-      regs =
+    { id_to_wire = M.empty
+    ; regs =
         Base.List.map Machine.all_of_machine_register ~f:(fun r ->
-            let name =
-              Machine.sexp_of_machine_register r |> Base.Sexp.to_string_hum
-            in
+            let name = Machine.sexp_of_machine_register r |> Base.Sexp.to_string_hum in
             zero dbits -- name)
-        |> Array.of_list;
+        |> Array.of_list
     }
+  ;;
 
-  type state = {
-    n : int;
-    next :
-      [ `next of int (* statemachine jumps (generally end of sequence?) *)
-      | `mem of sp_cmd * int (* memory operation *)
-      | `branch of sp_cmd * int * int (* branch *) ];
-    instrs : sp_cmd list;
-  }
+  type state =
+    { n : int
+    ; next :
+        [ `next of int (* statemachine jumps (generally end of sequence?) *)
+        | `mem of sp_cmd * int (* memory operation *)
+        | `branch of sp_cmd * int * int (* branch *)
+        ]
+    ; instrs : sp_cmd list
+    }
 
   let print_states sts =
     List.iter
@@ -219,13 +226,15 @@ module Compile = struct
         let open Printf in
         printf "****** %i\n" st.n;
         S.(print { id = 0; cmd = st.instrs });
-        printf "next = %s\n"
-          ( match st.next with
+        printf
+          "next = %s\n"
+          (match st.next with
           | `next i -> sprintf "%i" i
           | `mem (_, i) -> sprintf "%i [mem]" i
-          | `branch (_, a, b) -> sprintf "%i/%i [branch]" a b );
+          | `branch (_, a, b) -> sprintf "%i/%i [branch]" a b);
         printf "\n")
       sts
+  ;;
 
   let compile st =
     let cmd = State_poly.normalise st.cmd in
@@ -234,89 +243,72 @@ module Compile = struct
       | _ -> failwith "not a constant expression"
     in
     let rec compile_expr env = function
-      | Interp.Op (op, a', b') -> (
-          let a, b =
-            try (compile_expr env a', compile_expr env b')
-            with _ -> failwith "failed to look up subexpression"
-          in
-          match op with
-          | "+" -> a +: b
-          | "-" -> a -: b
-          | ">>" -> srl a (const_val b')
-          | ">>+" -> sra a (const_val b')
-          | "<<" -> sll a (const_val b')
-          | _ -> failwith ("unknown expression operator '" ^ op ^ "'") )
-      | Val id -> (
-          try M.find id env.id_to_wire
-          with _ -> failwith ("cant find variable " ^ string_of_int id) )
+      | Interp.Op (op, a', b') ->
+        let a, b =
+          try compile_expr env a', compile_expr env b' with
+          | _ -> failwith "failed to look up subexpression"
+        in
+        (match op with
+        | "+" -> a +: b
+        | "-" -> a -: b
+        | ">>" -> srl a (const_val b')
+        | ">>+" -> sra a (const_val b')
+        | "<<" -> sll a (const_val b')
+        | _ -> failwith ("unknown expression operator '" ^ op ^ "'"))
+      | Val id ->
+        (try M.find id env.id_to_wire with
+        | _ -> failwith ("cant find variable " ^ string_of_int id))
       | Const x -> consti ~width:dbits x
     in
     let rec _compile_stats env = function
       | [] -> env
       (* (psuedo-) update registers and expressions *)
       | Get_reg (id, reg) :: t ->
-          let env =
-            {
-              env with
-              id_to_wire = M.add id (getr env.regs reg) env.id_to_wire;
-            }
-          in
-          _compile_stats env t
+        let env = { env with id_to_wire = M.add id (getr env.regs reg) env.id_to_wire } in
+        _compile_stats env t
       | Set_reg (reg, vl) :: t ->
-          setr env.regs reg (compile_expr env vl);
-          _compile_stats env t
+        setr env.regs reg (compile_expr env vl);
+        _compile_stats env t
       (* memory io and state completion *)
       | Get_mem (id, _, _) :: t ->
-          let env =
-            { env with id_to_wire = M.add id (wire dbits) env.id_to_wire }
-          in
-          _compile_stats env t
+        let env = { env with id_to_wire = M.add id (wire dbits) env.id_to_wire } in
+        _compile_stats env t
       | Set_mem (_, _, _) :: t -> _compile_stats env t
       | _ -> failwith "not yet"
     in
-
-    let newst ?(next = `next 0) ?(instrs = []) ?(n = 0) () =
-      { n; next; instrs }
+    let newst ?(next = `next 0) ?(instrs = []) ?(n = 0) () = { n; next; instrs } in
+    let _rs' rstate = function
+      | [] -> 0
+      | _ -> rstate
     in
-    let _rs' rstate = function [] -> 0 | _ -> rstate in
-
     let rec compile_states (cs, rs, sts) instrs = function
-      | [] -> (cs + 1, rs, newst ~instrs ~n:cs () :: sts)
+      | [] -> cs + 1, rs, newst ~instrs ~n:cs () :: sts
       (* Get/Set_reg; push instructions *)
       | (Get_reg _ as x) :: t -> compile_states (cs, rs, sts) (x :: instrs) t
       | (Set_reg _ as x) :: t -> compile_states (cs, rs, sts) (x :: instrs) t
       (* Get/Set_mem generate new states *)
       | (Set_mem _ as x) :: t ->
-          let st =
-            newst ~instrs
-              ~next:(`mem (x, if t = [] then rs else cs + 1))
-              ~n:cs ()
-          in
-          compile_states (cs + 1, rs, st :: sts) [] t
+        let st = newst ~instrs ~next:(`mem (x, if t = [] then rs else cs + 1)) ~n:cs () in
+        compile_states (cs + 1, rs, st :: sts) [] t
       | (Get_mem _ as x) :: t ->
-          let st =
-            newst ~instrs
-              ~next:(`mem (x, if t = [] then rs else cs + 1))
-              ~n:cs ()
-          in
-          compile_states (cs + 1, rs, st :: sts) [] t
+        let st = newst ~instrs ~next:(`mem (x, if t = [] then rs else cs + 1)) ~n:cs () in
+        compile_states (cs + 1, rs, st :: sts) [] t
       (* control flow creates new states *)
       | (Cond (_, a, b) as x) :: t ->
-          (* create branch states *)
-          let ns, bs0 = (cs + 1, cs + 2) in
-          let bs1, _, sts = compile_states (bs0, ns, sts) [] a in
-          let _, _, sts = compile_states (bs1, ns, sts) [] b in
-          (* create cur state *)
-          let st = newst ~instrs ~n:cs ~next:(`branch (x, bs0, bs1)) () in
-          (* continue with next states *)
-          compile_states (ns, rs, st :: sts) [] t
+        (* create branch states *)
+        let ns, bs0 = cs + 1, cs + 2 in
+        let bs1, _, sts = compile_states (bs0, ns, sts) [] a in
+        let _, _, sts = compile_states (bs1, ns, sts) [] b in
+        (* create cur state *)
+        let st = newst ~instrs ~n:cs ~next:(`branch (x, bs0, bs1)) () in
+        (* continue with next states *)
+        compile_states (ns, rs, st :: sts) [] t
       | Iter _ :: _ -> failwith "not sure about iter yet!"
     in
-
     (*compile_stats (init_env ()) cmd*)
     let _, _, sts = compile_states (0, 0, []) [] cmd in
     let sts = List.sort (fun a b -> compare a.n b.n) sts in
-
     let () = print_states sts in
     ()
+  ;;
 end

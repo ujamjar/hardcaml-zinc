@@ -156,9 +156,10 @@ let to_int opcode = Variants.to_rank opcode
 let of_int =
   let map =
     all
-    |> List.map ~f:(fun opcode -> (to_int opcode, opcode))
+    |> List.map ~f:(fun opcode -> to_int opcode, opcode)
     |> Map.of_alist_exn (module Int)
   in
   Map.find_exn map
+;;
 
 let to_string opcode = sexp_of_t opcode |> Sexp.to_string_hum

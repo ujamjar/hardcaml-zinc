@@ -8,18 +8,15 @@ module Make (B : Comb.S) = struct
   open B
 
   let arbiter ~prefix ~unmasked_req ~masked_req =
-    let sel_masked =
-      tree ~arity:4 ~f:(reduce ~f:( |: )) (bits_msb masked_req)
-    in
+    let sel_masked = tree ~arity:4 ~f:(reduce ~f:( |: )) (bits_msb masked_req) in
     let req = mux2 sel_masked masked_req unmasked_req in
     let mask, req =
-      let mask =
-        concat_msb @@ List.rev @@ prefix ( |: ) (List.rev (bits_msb req))
-      in
+      let mask = concat_msb @@ List.rev @@ prefix ( |: ) (List.rev (bits_msb req)) in
       let smask = sll mask 1 in
-      (smask &: req, mask ^: smask)
+      smask &: req, mask ^: smask
     in
-    (mask, req)
+    mask, req
+  ;;
 end
 
 open Signal
@@ -34,6 +31,7 @@ let arbiter ~prefix ~enable ~req =
   let next', gnt = A.arbiter ~prefix ~unmasked_req:req ~masked_req in
   next <== next';
   gnt
+;;
 
 module Test = struct
   module B = Bits
@@ -46,14 +44,12 @@ module Test = struct
     let circ = Circuit.create_exn ~name:"arbiter" [ output "gnt" gnt ] in
     let sim = Cyclesim.create circ in
     let waves, sim = Waveform.create sim in
-
     let req, gnt, gntn =
-      ( Cyclesim.in_port sim "req",
-        Cyclesim.out_port ~clock_edge:Before sim "gnt",
-        Cyclesim.out_port ~clock_edge:After sim "gnt" )
+      ( Cyclesim.in_port sim "req"
+      , Cyclesim.out_port ~clock_edge:Before sim "gnt"
+      , Cyclesim.out_port ~clock_edge:After sim "gnt" )
     in
     Cyclesim.reset sim;
-
     for _ = 0 to 0 do
       req := B.random ~width:bits;
       while B.to_int !req <> 0 do
@@ -68,4 +64,5 @@ module Test = struct
       done
     done;
     Waveform.print waves
+  ;;
 end
