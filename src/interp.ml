@@ -41,32 +41,32 @@ end
 module State_eval = struct
   type st = Machine.state
 
-  let get_reg st r =
+  let get_reg st (r : Machine.Register.t) =
     match r with
-    | `accu -> st.accu, st
-    | `env -> st.env, st
-    | `pc -> st.pc, st
-    | `sp -> st.sp, st
-    | `extra_args -> st.extra_args, st
-    | `trapsp -> st.trapsp, st
-    | `global_data -> st.global_data, st
-    | `atom_table -> st.atom_table, st
-    | `alloc_base -> st.alloc_base, st
-    | `stack_high -> st.stack_high, st
+    | Accu -> st.accu, st
+    | Env -> st.env, st
+    | Pc -> st.pc, st
+    | Sp -> st.sp, st
+    | Extra_args -> st.extra_args, st
+    | Trapsp -> st.trapsp, st
+    | Global_data -> st.global_data, st
+    | Atom_table -> st.atom_table, st
+    | Alloc_base -> st.alloc_base, st
+    | Stack_high -> st.stack_high, st
   ;;
 
-  let set_reg st r v =
+  let set_reg st (r : Machine.Register.t) v =
     match r with
-    | `accu -> { st with accu = v }
-    | `env -> { st with env = v }
-    | `pc -> { st with pc = v }
-    | `sp -> { st with sp = v }
-    | `extra_args -> { st with extra_args = v }
-    | `trapsp -> { st with trapsp = v }
-    | `global_data -> failwith "cannot write to global data pointer"
-    | `atom_table -> failwith "cannot write to atom table pointer"
-    | `alloc_base -> { st with alloc_base = v }
-    | `stack_high -> failwith "cannot write to stack_high pointer"
+    | Accu -> { st with accu = v }
+    | Env -> { st with env = v }
+    | Pc -> { st with pc = v }
+    | Sp -> { st with sp = v }
+    | Extra_args -> { st with extra_args = v }
+    | Trapsp -> { st with trapsp = v }
+    | Global_data -> failwith "cannot write to global data pointer"
+    | Atom_table -> failwith "cannot write to atom table pointer"
+    | Alloc_base -> { st with alloc_base = v }
+    | Stack_high -> failwith "cannot write to stack_high pointer"
   ;;
 
   let get_mem st _cache adr =
@@ -318,7 +318,7 @@ struct
   (* move logic into state *)
   let read_bytecode adr st =
     let open S in
-    let ins, st = S.get_mem st `program (srl adr c3) in
+    let ins, st = S.get_mem st Program (srl adr c3) in
     let sel = adr &: const 4 in
     let ins = sra (if S.equal sel zero then sll ins c32 else ins) c32 in
     ins, st
@@ -434,19 +434,19 @@ module Opcodes (M : Monad) = struct
 
   let incr r n = modify_reg r (fun v -> v +: n)
   let decr r n = modify_reg r (fun v -> v -: n)
-  let incr_sp = incr `sp (const 8)
-  let decr_sp = decr `sp (const 8)
-  let incr_pc = incr `pc (const 4)
-  let _decr_pc = decr `pc (const 4)
+  let incr_sp = incr Sp (const 8)
+  let decr_sp = decr Sp (const 8)
+  let incr_pc = incr Pc (const 4)
+  let _decr_pc = decr Pc (const 4)
   let c2, c3 = const 2, const 3
   let aofs x = sll x c3
   let pcofs x = sll x c2
   let _mofs x = srl x c3
-  let read_bytecode ofs = read_reg `pc >>= fun pc -> read_bytecode (pc +: sll ofs c2)
-  let read_stack ofs = read_reg `sp >>= fun sp -> read_mem `stack (sp +: aofs ofs)
+  let read_bytecode ofs = read_reg Pc >>= fun pc -> read_bytecode (pc +: sll ofs c2)
+  let read_stack ofs = read_reg Sp >>= fun sp -> read_mem Stack (sp +: aofs ofs)
 
   let write_stack ofs value =
-    read_reg `sp >>= fun sp -> write_mem `stack (sp +: aofs ofs) value
+    read_reg Sp >>= fun sp -> write_mem Stack (sp +: aofs ofs) value
   ;;
 
   let push_stack value = decr_sp >> write_stack zero value
@@ -465,7 +465,7 @@ module Opcodes (M : Monad) = struct
   ;;
 
   let pop_arg = read_bytecode zero >>= fun arg -> incr_pc >> return arg
-  let push_stack_accu = read_reg `accu >>= push_stack
+  let push_stack_accu = read_reg Accu >>= push_stack
 
   let copy_modify_reg from to_ f =
     read_reg from >>= fun x -> return (f x) >>= write_reg to_
@@ -473,16 +473,16 @@ module Opcodes (M : Monad) = struct
 
   include Mlvalues.Make (M.S)
 
-  let header ptr = read_mem `mem (ptr -: aofs one)
-  let field ptr fld = read_mem `mem (ptr +: aofs fld)
-  let set_field ptr fld v = write_mem `mem (ptr +: aofs fld) v
+  let header ptr = read_mem Mem (ptr -: aofs one)
+  let field ptr fld = read_mem Mem (ptr +: aofs fld)
+  let set_field ptr fld v = write_mem Mem (ptr +: aofs fld) v
   let modify_field = set_field
 
   let alloc size tag =
-    read_reg `alloc_base
+    read_reg Alloc_base
     >>= fun base ->
-    write_reg `alloc_base (base +: aofs (size +: one))
-    >> write_mem `mem base (make_header size white tag)
+    write_reg Alloc_base (base +: aofs (size +: one))
+    >> write_mem Mem base (make_header size white tag)
     >> return (base +: aofs one)
   ;;
 
@@ -530,14 +530,10 @@ module Opcodes (M : Monad) = struct
       Next;
   *)
 
-  let accn i = read_stack i >>= write_reg `accu
+  let accn i = read_stack i >>= write_reg Accu
   let acc = pop_arg >>= accn
   let push = push_stack_accu
-
-  let pushaccn arg =
-    push_stack_accu >> read_stack arg >>= fun data -> write_reg `accu data
-  ;;
-
+  let pushaccn arg = push_stack_accu >> read_stack arg >>= fun data -> write_reg Accu data
   let pushacc = pop_arg >>= pushaccn
 
   (*
@@ -545,7 +541,7 @@ module Opcodes (M : Monad) = struct
       sp += *pc++;
       Next;
   *)
-  let pop = pop_arg >>= fun ofs -> modify_reg `sp (fun sp -> sp +: aofs ofs)
+  let pop = pop_arg >>= fun ofs -> modify_reg Sp (fun sp -> sp +: aofs ofs)
 
   (*
     Instruct(ASSIGN):
@@ -554,7 +550,7 @@ module Opcodes (M : Monad) = struct
       Next;
   *)
   let assign =
-    pop_arg >>= fun ofs -> read_reg `accu >>= write_stack ofs >> write_reg `accu val_unit
+    pop_arg >>= fun ofs -> read_reg Accu >>= write_stack ofs >> write_reg Accu val_unit
   ;;
 
   (************************************************************)
@@ -580,7 +576,7 @@ module Opcodes (M : Monad) = struct
       accu = Field(env, *pc++);
       Next;
   *)
-  let envaccn i = read_reg `env >>= fun ptr -> field ptr i >>= write_reg `accu
+  let envaccn i = read_reg Env >>= fun ptr -> field ptr i >>= write_reg Accu
   let envacc = pop_arg >>= envaccn
   let pushenvaccn i = push_stack_accu >> envaccn i
   let pushenvacc = pop_arg >>= pushenvaccn
@@ -599,12 +595,12 @@ module Opcodes (M : Monad) = struct
     }
   *)
   let push_retaddr =
-    read_reg `extra_args
+    read_reg Extra_args
     >>= fun eargs ->
     push_stack (val_int eargs)
-    >> read_reg `env
+    >> read_reg Env
     >>= push_stack
-    >> read_reg `pc
+    >> read_reg Pc
     >>= fun pc -> pop_arg >>= fun ofs -> push_stack (pc +: pcofs ofs)
   ;;
 
@@ -619,9 +615,9 @@ module Opcodes (M : Monad) = struct
   let apply =
     pop_arg
     >>= fun eargs ->
-    write_reg `extra_args (eargs -: one)
-    >> read_reg `accu
-    >>= fun accu -> read_mem `mem accu >>= write_reg `pc >> write_reg `env accu
+    write_reg Extra_args (eargs -: one)
+    >> read_reg Accu
+    >>= fun accu -> read_mem Mem accu >>= write_reg Pc >> write_reg Env accu
   ;;
 
   (*
@@ -646,20 +642,20 @@ module Opcodes (M : Monad) = struct
   let applyn n =
     pop_stack_n n
     >>= fun args ->
-    read_reg `extra_args
+    read_reg Extra_args
     >>= fun earg ->
     push_stack (val_int earg)
-    >> read_reg `env
+    >> read_reg Env
     >>= push_stack
-    >> read_reg `pc
+    >> read_reg Pc
     >>= push_stack
     >> push_stack_n (List.rev args)
-    >> read_reg `accu
+    >> read_reg Accu
     >>= fun accu ->
-    read_mem `mem accu
-    >>= write_reg `pc
-    >> write_reg `env accu
-    >> write_reg `extra_args (const (n - 1))
+    read_mem Mem accu
+    >>= write_reg Pc
+    >> write_reg Env accu
+    >> write_reg Extra_args (const (n - 1))
   ;;
 
   (*
@@ -684,17 +680,17 @@ module Opcodes (M : Monad) = struct
     >>= fun nargs ->
     pop_arg
     >>= fun slotsize ->
-    read_reg `sp
+    read_reg Sp
     >>= fun sp ->
     let newsp = slotsize -: nargs in
     for_dn (nargs -: one) zero (fun i -> read_stack i >>= write_stack (i +: newsp))
-    >> write_reg `sp (sp +: aofs newsp)
-    >> read_reg `accu
+    >> write_reg Sp (sp +: aofs newsp)
+    >> read_reg Accu
     >>= fun accu ->
-    read_mem `mem accu
-    >>= write_reg `pc
-    >> write_reg `env accu
-    >> modify_reg `extra_args (fun eargs -> eargs +: (nargs -: one))
+    read_mem Mem accu
+    >>= write_reg Pc
+    >> write_reg Env accu
+    >> modify_reg Extra_args (fun eargs -> eargs +: (nargs -: one))
     >> check_stacks
   ;;
 
@@ -719,14 +715,14 @@ module Opcodes (M : Monad) = struct
     >>= fun args ->
     pop_arg
     >>= fun ofs ->
-    modify_reg `sp (fun sp -> sp +: aofs (ofs -: const n))
+    modify_reg Sp (fun sp -> sp +: aofs (ofs -: const n))
     >> push_stack_n (List.rev args)
-    >> read_reg `accu
+    >> read_reg Accu
     >>= fun accu ->
-    read_mem `mem accu
-    >>= write_reg `pc
-    >> write_reg `env accu
-    >> modify_reg `extra_args (fun earg -> earg +: const (n - 1))
+    read_mem Mem accu
+    >>= write_reg Pc
+    >> write_reg Env accu
+    >> modify_reg Extra_args (fun earg -> earg +: const (n - 1))
     >> check_stacks
   ;;
 
@@ -749,20 +745,20 @@ module Opcodes (M : Monad) = struct
   let return_ =
     pop_arg
     >>= fun ofs ->
-    modify_reg `sp (fun sp -> sp +: aofs ofs)
-    >> read_reg `extra_args
+    modify_reg Sp (fun sp -> sp +: aofs ofs)
+    >> read_reg Extra_args
     >>= fun earg ->
     if_
       (earg >+ zero)
-      (modify_reg `extra_args (fun earg -> earg -: one)
-      >> read_reg `accu
-      >>= fun accu -> read_mem `mem accu >>= write_reg `pc >> write_reg `env accu)
+      (modify_reg Extra_args (fun earg -> earg -: one)
+      >> read_reg Accu
+      >>= fun accu -> read_mem Mem accu >>= write_reg Pc >> write_reg Env accu)
       (pop_stack
-      >>= write_reg `pc
+      >>= write_reg Pc
       >> pop_stack
-      >>= write_reg `env
+      >>= write_reg Env
       >> pop_stack
-      >>= fun _eargs -> write_reg `extra_args (int_val earg))
+      >>= fun _eargs -> write_reg Extra_args (int_val earg))
   ;;
 
   (*
@@ -777,17 +773,17 @@ module Opcodes (M : Monad) = struct
     }
   *)
   let restart =
-    read_reg `env
+    read_reg Env
     >>= header
     >>= fun hdr ->
     let num_args = size hdr -: const 2 in
-    (*modify_reg `sp (fun sp -> sp -: num_args) >>*)
-    read_reg `env
+    (*modify_reg Sp (fun sp -> sp -: num_args) >>*)
+    read_reg Env
     >>= fun env ->
     for_dn (num_args -: one) zero (fun i -> field env (i +: const 2) >>= push_stack)
     >> field env one
-    >>= write_reg `env
-    >> modify_reg `extra_args (fun earg -> earg +: num_args)
+    >>= write_reg Env
+    >> modify_reg Extra_args (fun earg -> earg +: num_args)
   ;;
 
   (*
@@ -814,26 +810,26 @@ module Opcodes (M : Monad) = struct
   let grab =
     pop_arg
     >>= fun required ->
-    read_reg `extra_args
+    read_reg Extra_args
     >>= fun earg ->
     if_
       (earg >=+ required)
-      (write_reg `extra_args (earg -: required))
+      (write_reg Extra_args (earg -: required))
       (let num_args = earg +: one in
        alloc (num_args +: const 2) closure_tag
        >>= fun accu ->
-       read_reg `env
+       read_reg Env
        >>= set_field accu one
        >> for_up zero num_args (fun i -> pop_stack >>= set_field accu (i +: const 2))
-       >> read_reg `pc
+       >> read_reg Pc
        >>= fun pc ->
-       write_mem `mem accu (pc -: pcofs (const 3))
+       write_mem Mem accu (pc -: pcofs (const 3))
        >> pop_stack
-       >>= write_reg `pc
+       >>= write_reg Pc
        >> pop_stack
-       >>= write_reg `env
+       >>= write_reg Env
        >> pop_stack
-       >>= fun earg -> write_reg `extra_args (int_val earg) >> write_reg `accu accu)
+       >>= fun earg -> write_reg Extra_args (int_val earg) >> write_reg Accu accu)
   ;;
 
   (*
@@ -863,17 +859,17 @@ module Opcodes (M : Monad) = struct
   let closure =
     pop_arg
     >>= fun nvars ->
-    if_ (nvars >+ zero) (read_reg `accu >>= push_stack) (return ())
+    if_ (nvars >+ zero) (read_reg Accu >>= push_stack) (return ())
     >> alloc (nvars +: one) closure_tag
     >>= fun ptr ->
     for_up zero nvars (fun i -> pop_stack >>= set_field ptr (i +: one))
     >> pop_arg
     >>= fun ofs ->
-    read_reg `pc
+    read_reg Pc
     >>= fun pc ->
-    write_mem `mem ptr (pc +: pcofs (ofs -: one))
+    write_mem Mem ptr (pc +: pcofs (ofs -: one))
     >> (* need -1 because we've popped from pc *)
-    write_reg `accu ptr
+    write_reg Accu ptr
   ;;
 
   (*
@@ -920,11 +916,11 @@ module Opcodes (M : Monad) = struct
     pop_arg
     >>= fun nvars ->
     let blksize = sll nfuncs one -: one +: nvars in
-    if_ (nvars >+ zero) (read_reg `accu >>= push_stack) (return ())
+    if_ (nvars >+ zero) (read_reg Accu >>= push_stack) (return ())
     >> alloc blksize closure_tag
     >>= fun ptr ->
     for_up zero nvars (fun i -> pop_stack >>= set_field ptr (sll nfuncs one -: one +: i))
-    >> read_reg `pc
+    >> read_reg Pc
     >>= fun pc ->
     pop_arg
     >>= fun ofs ->
@@ -935,7 +931,7 @@ module Opcodes (M : Monad) = struct
            set_field ptr (i2 -: one) (make_header i2 white infix_tag)
            >> pop_arg
            >>= fun ofs -> set_field ptr i2 (pc +: pcofs ofs) >> push_stack (ptr +: aofs i2))
-    >> write_reg `accu ptr
+    >> write_reg Accu ptr
   ;;
 
   (*
@@ -957,7 +953,7 @@ module Opcodes (M : Monad) = struct
     Instruct(OFFSETCLOSURE2):
       accu = env + 2 * sizeof(value); Next;
   *)
-  let offsetclosure' ofs = copy_modify_reg `env `accu (fun d -> d +: aofs ofs)
+  let offsetclosure' ofs = copy_modify_reg Env Accu (fun d -> d +: aofs ofs)
   let pushoffsetclosure' ofs = push_stack_accu >> offsetclosure' ofs
   let pushoffsetclosure = pop_arg >>= pushoffsetclosure'
   let offsetclosure = pop_arg >>= offsetclosure'
@@ -992,19 +988,18 @@ module Opcodes (M : Monad) = struct
     }
   *)
   let getglobal =
-    read_reg `global_data
-    >>= fun global_data ->
-    pop_arg >>= fun fld -> field global_data fld >>= write_reg `accu
+    read_reg Global_data
+    >>= fun global_data -> pop_arg >>= fun fld -> field global_data fld >>= write_reg Accu
   ;;
 
   let pushgetglobal = push_stack_accu >> getglobal
 
   let getglobalfield =
-    read_reg `global_data
+    read_reg Global_data
     >>= fun global_data ->
     pop_arg
     >>= fun fld ->
-    field global_data fld >>= fun data -> pop_arg >>= field data >>= write_reg `accu
+    field global_data fld >>= fun data -> pop_arg >>= field data >>= write_reg Accu
   ;;
 
   let pushgetglobalfield = push_stack_accu >> getglobalfield
@@ -1017,11 +1012,11 @@ module Opcodes (M : Monad) = struct
       Next;
   *)
   let setglobal =
-    read_reg `global_data
+    read_reg Global_data
     >>= fun global_data ->
     pop_arg
     >>= fun fld ->
-    read_reg `accu >>= modify_field global_data fld >> write_reg `accu val_unit
+    read_reg Accu >>= modify_field global_data fld >> write_reg Accu val_unit
   ;;
 
   (************************************************************)
@@ -1040,7 +1035,7 @@ module Opcodes (M : Monad) = struct
     Instruct(ATOM):
       accu = Atom( *pc++); Next;
   *)
-  let atom' ofs = read_reg `atom_table >>= fun atom -> write_reg `accu (atom +: aofs ofs)
+  let atom' ofs = read_reg Atom_table >>= fun atom -> write_reg Accu (atom +: aofs ofs)
   let atom0 = atom' zero
   let pushatom0 = push_stack_accu >> atom0
   let atom = pop_arg >>= atom'
@@ -1082,10 +1077,10 @@ module Opcodes (M : Monad) = struct
     >>= fun tag ->
     alloc wosize tag
     >>= fun block ->
-    read_reg `accu
+    read_reg Accu
     >>= set_field block zero
     >> for_up one wosize (fun i -> pop_stack >>= set_field block i)
-    >> write_reg `accu block
+    >> write_reg Accu block
   ;;
 
   let makeblock = pop_arg >>= makeblockn
@@ -1115,10 +1110,10 @@ module Opcodes (M : Monad) = struct
     >>= fun size ->
     alloc size double_array_tag
     >>= fun block ->
-    read_reg `accu
+    read_reg Accu
     >>= set_field block zero
     >> for_up one size (fun i -> pop_stack >>= set_field block i)
-    >> write_reg `accu block
+    >> write_reg Accu block
   ;;
 
   (************************************************************)
@@ -1133,7 +1128,7 @@ module Opcodes (M : Monad) = struct
     Instruct(GETFIELD):
       accu = Field(accu, *pc); pc++; Next;
   *)
-  let getfieldn n = read_reg `accu >>= fun accu -> field accu n >>= write_reg `accu
+  let getfieldn n = read_reg Accu >>= fun accu -> field accu n >>= write_reg Accu
   let getfield = pop_arg >>= getfieldn
 
   (*
@@ -1146,13 +1141,13 @@ module Opcodes (M : Monad) = struct
     }
   *)
   let getfloatfield =
-    read_reg `accu
+    read_reg Accu
     >>= fun accu ->
     pop_arg
     >>= fun fld ->
     field accu fld
     >>= fun d ->
-    alloc one double_tag >>= fun ptr -> set_field ptr zero d >> write_reg `accu ptr
+    alloc one double_tag >>= fun ptr -> set_field ptr zero d >> write_reg Accu ptr
   ;;
 
   (*
@@ -1172,9 +1167,9 @@ module Opcodes (M : Monad) = struct
       Next;
   *)
   let setfieldn n =
-    read_reg `accu
+    read_reg Accu
     >>= fun accu ->
-    pop_stack >>= fun d -> modify_field accu n d >> write_reg `accu val_unit
+    pop_stack >>= fun d -> modify_field accu n d >> write_reg Accu val_unit
   ;;
 
   let setfield = pop_arg >>= setfieldn
@@ -1193,21 +1188,21 @@ module Opcodes (M : Monad) = struct
   (* Array operations *)
 
   let vectlength =
-    read_reg `accu >>= header >>= fun hdr -> write_reg `accu (val_int (size hdr))
+    read_reg Accu >>= header >>= fun hdr -> write_reg Accu (val_int (size hdr))
   ;;
 
   let getvectitem =
-    read_reg `accu
-    >>= fun accu -> pop_stack >>= fun fld -> field accu (int_val fld) >>= write_reg `accu
+    read_reg Accu
+    >>= fun accu -> pop_stack >>= fun fld -> field accu (int_val fld) >>= write_reg Accu
   ;;
 
   let setvectitem =
-    read_reg `accu
+    read_reg Accu
     >>= fun accu ->
     pop_stack
     >>= fun fld ->
     pop_stack
-    >>= fun data -> modify_field accu (int_val fld) data >> write_reg `accu val_unit
+    >>= fun data -> modify_field accu (int_val fld) data >> write_reg Accu val_unit
   ;;
 
   (************************************************************)
@@ -1222,16 +1217,16 @@ module Opcodes (M : Monad) = struct
   let getstringchar =
     pop_stack
     >>= fun byte_ofs ->
-    read_reg `accu
+    read_reg Accu
     >>= fun ptr ->
     let c7, c255 = const 7, const 255 in
     let byte_ofs = int_val byte_ofs in
     let ptr = ptr +: (byte_ofs &: ~:c7) in
     let ofs = byte_ofs &: c7 in
-    read_mem `mem ptr
+    read_mem Mem ptr
     >>= fun str ->
     let byte = srl str (sll ofs c3) &: c255 in
-    write_reg `accu (val_int byte)
+    write_reg Accu (val_int byte)
   ;;
 
   (*
@@ -1246,17 +1241,17 @@ module Opcodes (M : Monad) = struct
     >>= fun byte_ofs ->
     pop_stack
     >>= fun byte_val ->
-    read_reg `accu
+    read_reg Accu
     >>= fun ptr ->
     let c7, c255 = const 7, const 255 in
     let byte_ofs = int_val byte_ofs in
     let ptr = ptr +: (byte_ofs &: ~:c7) in
     let ofs = byte_ofs &: c7 in
-    read_mem `mem ptr
+    read_mem Mem ptr
     >>= fun str ->
     let byte = sll (int_val byte_val) (sll ofs c3) in
     let mask = ~:(sll c255 (sll ofs c3)) in
-    write_mem `mem ptr (str &: mask |: byte) >> write_reg `accu val_unit
+    write_mem Mem ptr (str &: mask |: byte) >> write_reg Accu val_unit
   ;;
 
   (************************************************************)
@@ -1267,23 +1262,21 @@ module Opcodes (M : Monad) = struct
       pc += *pc;
       Next;
   *)
-  let branch =
-    read_bytecode zero >>= fun ofs -> modify_reg `pc (fun pc -> pc +: pcofs ofs)
-  ;;
+  let branch = read_bytecode zero >>= fun ofs -> modify_reg Pc (fun pc -> pc +: pcofs ofs)
 
   (*
     Instruct(BRANCHIF):
       if (accu != Val_false) pc += *pc; else pc++;
       Next;
   *)
-  let branchif = read_reg `accu >>= fun accu -> if_ (accu <>: val_false) branch incr_pc
+  let branchif = read_reg Accu >>= fun accu -> if_ (accu <>: val_false) branch incr_pc
 
   (*
     Instruct(BRANCHIFNOT):
       if (accu == Val_false) pc += *pc; else pc++;
       Next;
   *)
-  let branchifnot = read_reg `accu >>= fun accu -> if_ (accu ==: val_false) branch incr_pc
+  let branchifnot = read_reg Accu >>= fun accu -> if_ (accu ==: val_false) branch incr_pc
 
   (*
     Instruct(SWITCH): {
@@ -1301,7 +1294,7 @@ module Opcodes (M : Monad) = struct
     }
   *)
   let switch =
-    read_reg `accu
+    read_reg Accu
     >>= fun accu ->
     if_
       (is_block accu)
@@ -1311,11 +1304,11 @@ module Opcodes (M : Monad) = struct
       >>= fun hdr ->
       let index = tag hdr in
       read_bytecode ((sizes &: const 0xFFFF) +: index)
-      >>= fun ofs -> modify_reg `pc (fun pc -> pc +: pcofs ofs))
+      >>= fun ofs -> modify_reg Pc (fun pc -> pc +: pcofs ofs))
       (let index = int_val accu in
        incr_pc
        >> read_bytecode index
-       >>= fun ofs -> modify_reg `pc (fun pc -> pc +: pcofs ofs))
+       >>= fun ofs -> modify_reg Pc (fun pc -> pc +: pcofs ofs))
   ;;
 
   (*
@@ -1325,7 +1318,7 @@ module Opcodes (M : Monad) = struct
   *)
   let boolnot =
     (* probably not the hardware implementation we'd choose... *)
-    modify_reg `accu (fun accu -> val_false +: val_true -: accu)
+    modify_reg Accu (fun accu -> val_false +: val_true -: accu)
   ;;
 
   (************************************************************)
@@ -1343,18 +1336,18 @@ module Opcodes (M : Monad) = struct
       Next;
   *)
   let pushtrap =
-    read_reg `extra_args
+    read_reg Extra_args
     >>= fun earg ->
     push_stack (val_int earg)
-    >> read_reg `env
+    >> read_reg Env
     >>= push_stack
-    >> read_reg `trapsp
+    >> read_reg Trapsp
     >>= push_stack
     >> pop_arg
     >>= fun ofs ->
-    read_reg `pc
+    read_reg Pc
     >>= fun pc ->
-    push_stack (pc +: pcofs (ofs -: one)) >> copy_modify_reg `sp `trapsp (fun d -> d)
+    push_stack (pc +: pcofs (ofs -: one)) >> copy_modify_reg Sp Trapsp (fun d -> d)
   ;;
 
   (*
@@ -1374,7 +1367,7 @@ module Opcodes (M : Monad) = struct
     if_
       something_to_do
       (return ()) (* XXX *)
-      (read_stack one >>= write_reg `trapsp >> incr `sp (aofs (const 4)))
+      (read_stack one >>= write_reg Trapsp >> incr Sp (aofs (const 4)))
   ;;
 
   (*
@@ -1403,23 +1396,23 @@ module Opcodes (M : Monad) = struct
 
   let raise_ =
     (*if_ (trapsp >= (stack_high - initial_offset) ???? *)
-    read_reg `stack_high
+    read_reg Stack_high
     >>= fun stack_high ->
-    read_reg `trapsp
+    read_reg Trapsp
     >>= fun trapsp ->
     if_
       (trapsp >=: stack_high)
       (raise_top_exn Uncaught_exception)
-      (read_reg `trapsp
-      >>= write_reg `sp
+      (read_reg Trapsp
+      >>= write_reg Sp
       >> pop_stack
-      >>= write_reg `pc
+      >>= write_reg Pc
       >> pop_stack
-      >>= write_reg `trapsp
+      >>= write_reg Trapsp
       >> pop_stack
-      >>= write_reg `env
+      >>= write_reg Env
       >> pop_stack
-      >>= fun eargs -> write_reg `extra_args (int_val eargs))
+      >>= fun eargs -> write_reg Extra_args (int_val eargs))
   ;;
 
   let raise_notrace = raise_
@@ -1461,14 +1454,14 @@ module Opcodes (M : Monad) = struct
   (*
   let c_call n = 
     pop_arg >>= fun prim ->
-    read_reg `env >>= push_stack >>
+    read_reg Env >>= push_stack >>
     c_call prim >>= fun result -> 
     if_ (c_call_exn result) begin
-      write_reg `accu (c_call_val result) 
+      write_reg Accu (c_call_val result) 
     end begin
-      write_reg `accu (c_call_val result) >>
-      pop_stack >>= write_reg `env >>
-      modify_reg `sp (fun sp -> sp +: (aofs n))
+      write_reg Accu (c_call_val result) >>
+      pop_stack >>= write_reg Env >>
+      modify_reg Sp (fun sp -> sp +: (aofs n))
     end
 
   let c_calln = not_implemented
@@ -1493,7 +1486,7 @@ module Opcodes (M : Monad) = struct
     Instruct(PUSHCONST3):
       *--sp = accu; accu = Val_int(3); Next;
   *)
-  let constn n = write_reg `accu (val_int n)
+  let constn n = write_reg Accu (val_int n)
   let pushconstn n = push_stack_accu >> constn n
 
   (*
@@ -1521,8 +1514,8 @@ module Opcodes (M : Monad) = struct
     Instruct(MULINT):
       accu = Val_long(Long_val(accu) * Long_val( *sp++)); Next;
   *)
-  let negint = modify_reg `accu (fun d -> const 2 -: d)
-  let op2int f = pop_stack >>= fun b -> modify_reg `accu (fun a -> f a b)
+  let negint = modify_reg Accu (fun d -> const 2 -: d)
+  let op2int f = pop_stack >>= fun b -> modify_reg Accu (fun a -> f a b)
   let addint = op2int (fun a b -> a +: b -: one)
   let subint = op2int (fun a b -> a -: b +: one)
   let mulint = op2int (fun a b -> val_int (int_val a *: int_val b))
@@ -1548,7 +1541,7 @@ module Opcodes (M : Monad) = struct
     if_
       (divisor ==: zero)
       (raise_error "divide by zero")
-      (modify_reg `accu (fun a -> val_int (f (int_val a) divisor)))
+      (modify_reg Accu (fun a -> val_int (f (int_val a) divisor)))
   ;;
 
   let divint = op2div (fun a b -> a /: b)
@@ -1581,7 +1574,7 @@ module Opcodes (M : Monad) = struct
         Instruct(opname): 
           accu = Val_int((typ) accu tst (typ) *sp++); Next;
   *)
-  let int_comp f = pop_stack >>= fun b -> modify_reg `accu (fun a -> val_int (f a b))
+  let int_comp f = pop_stack >>= fun b -> modify_reg Accu (fun a -> val_int (f a b))
   let eq = int_comp ( ==: )
   let neq = int_comp ( <>: )
   let ltint = int_comp ( <+ )
@@ -1603,11 +1596,11 @@ module Opcodes (M : Monad) = struct
   let int_bcomp f =
     pop_arg
     >>= fun a ->
-    read_reg `accu
+    read_reg Accu
     >>= fun b ->
     if_
       (f a (int_val b))
-      (read_bytecode zero >>= fun ofs -> modify_reg `pc (fun pc -> pc +: pcofs ofs))
+      (read_bytecode zero >>= fun ofs -> modify_reg Pc (fun pc -> pc +: pcofs ofs))
       incr_pc
   ;;
 
@@ -1626,7 +1619,7 @@ module Opcodes (M : Monad) = struct
       pc++;
       Next
   *)
-  let offsetint = pop_arg >>= fun pc -> modify_reg `accu (fun accu -> accu +: sll pc one)
+  let offsetint = pop_arg >>= fun pc -> modify_reg Accu (fun accu -> accu +: sll pc one)
 
   (*
     Instruct(OFFSETREF):
@@ -1638,10 +1631,10 @@ module Opcodes (M : Monad) = struct
   let offsetref =
     pop_arg
     >>= fun pc ->
-    read_reg `accu
+    read_reg Accu
     >>= fun accu ->
     field accu zero
-    >>= fun d -> set_field accu zero (d +: sll pc one) >> write_reg `accu val_unit
+    >>= fun d -> set_field accu zero (d +: sll pc one) >> write_reg Accu val_unit
   ;;
 
   (*
@@ -1649,7 +1642,7 @@ module Opcodes (M : Monad) = struct
       accu = Val_long(accu & 1);
       Next;
   *)
-  let isint = modify_reg `accu (fun accu -> val_int (accu &: one))
+  let isint = modify_reg Accu (fun accu -> val_int (accu &: one))
 
   (************************************************************)
   (* Object-oriented operations *)
@@ -1662,11 +1655,11 @@ module Opcodes (M : Monad) = struct
       Next;
   *)
   let getmethod =
-    read_reg `accu
+    read_reg Accu
     >>= fun lab ->
     read_stack zero
     >>= fun obj ->
-    field obj zero >>= fun obj -> field obj (int_val lab) >>= fun d -> write_reg `accu d
+    field obj zero >>= fun obj -> field obj (int_val lab) >>= fun d -> write_reg Accu d
   ;;
 
   (*
@@ -1690,7 +1683,7 @@ module Opcodes (M : Monad) = struct
     >>= fun meths ->
     field meths zero
     >>= fun hi ->
-    M.dynmet meths hi >>= fun li -> field meths (li -: one) >>= write_reg `accu
+    M.dynmet meths hi >>= fun li -> field meths (li -: one) >>= write_reg Accu
   ;;
 
   (*
@@ -1701,11 +1694,10 @@ module Opcodes (M : Monad) = struct
       /* Fallthrough (to GETDYNMET) */
   *)
   let getpubmet =
-    read_reg `accu
+    read_reg Accu
     >>= push_stack
     >> read_bytecode zero
-    >>= fun arg ->
-    write_reg `accu (val_int arg) >> incr `pc (pcofs (const 2)) >> getdynmet
+    >>= fun arg -> write_reg Accu (val_int arg) >> incr Pc (pcofs (const 2)) >> getdynmet
   ;;
 
   (************************************************************)

@@ -1,29 +1,26 @@
 open Base
 
 module Register : sig
+  (* zinc registers *)
   type t =
-    (* zinc registers *)
-    [ `accu
-    | `env
-    | `pc
-    | `sp
-    | `extra_args
-    | `trapsp
-    | (* other state *)
-      `global_data
-    | `atom_table
-    | `alloc_base
-    | `stack_high
-    ]
+    | Accu
+    | Env
+    | Pc
+    | Sp
+    | Extra_args
+    | Trapsp
+    | Global_data
+    | Atom_table
+    | Alloc_base
+    | Stack_high
   [@@deriving equal, compare, sexp_of, enumerate, variants]
 end
 
 module Cache : sig
   type t =
-    [ `stack
-    | `program
-    | `mem
-    ]
+    | Stack
+    | Program
+    | Mem
   [@@deriving equal, compare, sexp_of, enumerate, variants]
 end
 

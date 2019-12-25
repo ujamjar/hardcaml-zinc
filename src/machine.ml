@@ -1,29 +1,26 @@
 open Base
 
 module Register = struct
+  (* zinc registers *)
   type t =
-    (* zinc registers *)
-    [ `accu
-    | `env
-    | `pc
-    | `sp
-    | `extra_args
-    | `trapsp
-    | (* other state *)
-      `global_data
-    | `atom_table
-    | `alloc_base
-    | `stack_high
-    ]
+    | Accu
+    | Env
+    | Pc
+    | Sp
+    | Extra_args
+    | Trapsp
+    | Global_data
+    | Atom_table
+    | Alloc_base
+    | Stack_high
   [@@deriving equal, compare, sexp_of, enumerate, variants]
 end
 
 module Cache = struct
   type t =
-    [ `stack
-    | `program
-    | `mem
-    ]
+    | Stack
+    | Program
+    | Mem
   [@@deriving equal, compare, sexp_of, enumerate, variants]
 end
 
@@ -85,23 +82,23 @@ let empty =
   }
 ;;
 
-let string_of_mach_reg = function
-  | `accu -> "accu"
-  | `env -> "env"
-  | `pc -> "pc"
-  | `sp -> "sp"
-  | `extra_args -> "extra_args"
-  | `trapsp -> "trapsp"
-  | `global_data -> "global_data"
-  | `atom_table -> "atom_table"
-  | `alloc_base -> "alloc_base"
-  | `stack_high -> "stack_high"
+let string_of_mach_reg : Register.t -> String.t = function
+  | Accu -> "accu"
+  | Env -> "env"
+  | Pc -> "pc"
+  | Sp -> "sp"
+  | Extra_args -> "extra_args"
+  | Trapsp -> "trapsp"
+  | Global_data -> "global_data"
+  | Atom_table -> "atom_table"
+  | Alloc_base -> "alloc_base"
+  | Stack_high -> "stack_high"
 ;;
 
-let string_of_cache = function
-  | `stack -> "stack"
-  | `program -> "program"
-  | `mem -> "mem"
+let string_of_cache : Cache.t -> String.t = function
+  | Stack -> "stack"
+  | Program -> "program"
+  | Mem -> "mem"
 ;;
 
 let num_machine_registers = List.length Register.all
