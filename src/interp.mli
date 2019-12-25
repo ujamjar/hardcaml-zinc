@@ -1,5 +1,4 @@
 open Base
-open Machine
 
 module type State = sig
   type st
@@ -8,13 +7,13 @@ module type State = sig
 
   (* machine registers *)
 
-  val get_reg : st -> machine_register -> t * st
-  val set_reg : st -> machine_register -> t -> st
+  val get_reg : st -> Machine.Register.t -> t * st
+  val set_reg : st -> Machine.Register.t -> t -> st
 
   (* memory access *)
 
-  val get_mem : st -> cache -> t -> t * st
-  val set_mem : st -> cache -> t -> t -> st
+  val get_mem : st -> Machine.Cache.t -> t -> t * st
+  val set_mem : st -> Machine.Cache.t -> t -> t -> st
 
   (* control *)
 
@@ -34,10 +33,10 @@ end
 module State_eval : State with type t = int64 and type st = Machine.state
 
 type sp_cmd =
-  | Get_reg of int * machine_register
-  | Set_reg of machine_register * sp_t
-  | Get_mem of int * cache * sp_t
-  | Set_mem of cache * sp_t * sp_t
+  | Get_reg of int * Machine.Register.t
+  | Set_reg of Machine.Register.t * sp_t
+  | Get_mem of int * Machine.Cache.t * sp_t
+  | Set_mem of Machine.Cache.t * sp_t * sp_t
   | Cond of sp_t * sp_cmd list * sp_cmd list
   | Iter of bool * int * sp_t * sp_t * sp_cmd list
 
@@ -74,11 +73,11 @@ module type Monad = sig
   val step : S.st -> 'a t -> 'a * S.st
   val trace : bool
   val debug : string -> unit t
-  val write_reg : machine_register -> S.t -> unit t
-  val read_reg : machine_register -> S.t t
-  val modify_reg : machine_register -> (S.t -> S.t) -> unit t
-  val read_mem : cache -> S.t -> S.t t
-  val write_mem : cache -> S.t -> S.t -> unit t
+  val write_reg : Machine.Register.t -> S.t -> unit t
+  val read_reg : Machine.Register.t -> S.t t
+  val modify_reg : Machine.Register.t -> (S.t -> S.t) -> unit t
+  val read_mem : Machine.Cache.t -> S.t -> S.t t
+  val write_mem : Machine.Cache.t -> S.t -> S.t -> unit t
   val read_bytecode : S.t -> S.t t
   val dynmet : S.t -> S.t -> S.t t
 end

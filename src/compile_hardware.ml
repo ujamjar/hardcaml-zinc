@@ -4,11 +4,11 @@ open Base
 open Interp
 
 let _initr x = Array.init Machine.num_machine_registers ~f:(fun _ -> x)
-let getr a i = a.(Machine.Variants_of_machine_register.to_rank i)
-let setr a i v = a.(Machine.Variants_of_machine_register.to_rank i) <- v
+let getr a i = a.(Machine.Register.Variants.to_rank i)
+let setr a i v = a.(Machine.Register.Variants.to_rank i) <- v
 let _initc x = Array.init Machine.num_cache_spaces ~f:(fun _ -> x)
-let _getc a i = a.(Machine.Variants_of_cache.to_rank i)
-let _setc a i v = a.(Machine.Variants_of_cache.to_rank i) <- v
+let _getc a i = a.(Machine.Cache.Variants.to_rank i)
+let _setc a i v = a.(Machine.Cache.Variants.to_rank i) <- v
 
 (* schedule the instructions according to dependancies.
 
@@ -184,8 +184,8 @@ let dbits = 64 (* XXX *)
 let _init_env () =
   { id_to_wire = Map.empty (module Int)
   ; regs =
-      List.map Machine.all_of_machine_register ~f:(fun r ->
-          let name = Machine.sexp_of_machine_register r |> Sexp.to_string_hum in
+      List.map Machine.Register.all ~f:(fun r ->
+          let name = Machine.Register.sexp_of_t r |> Sexp.to_string_hum in
           zero dbits -- name)
       |> Array.of_list
   }

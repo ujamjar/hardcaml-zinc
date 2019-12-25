@@ -1,27 +1,31 @@
 open Base
 
-type machine_register =
-  (* zinc registers *)
-  [ `accu
-  | `env
-  | `pc
-  | `sp
-  | `extra_args
-  | `trapsp
-  | (* other state *)
-    `global_data
-  | `atom_table
-  | `alloc_base
-  | `stack_high
-  ]
-[@@deriving equal, compare, sexp_of, enumerate, variants]
+module Register : sig
+  type t =
+    (* zinc registers *)
+    [ `accu
+    | `env
+    | `pc
+    | `sp
+    | `extra_args
+    | `trapsp
+    | (* other state *)
+      `global_data
+    | `atom_table
+    | `alloc_base
+    | `stack_high
+    ]
+  [@@deriving equal, compare, sexp_of, enumerate, variants]
+end
 
-type cache =
-  [ `stack
-  | `program
-  | `mem
-  ]
-[@@deriving equal, compare, sexp_of, enumerate, variants]
+module Cache : sig
+  type t =
+    [ `stack
+    | `program
+    | `mem
+    ]
+  [@@deriving equal, compare, sexp_of, enumerate, variants]
+end
 
 type memory_mapping =
   { code_address : int
@@ -55,7 +59,7 @@ type state =
   }
 
 val empty : state
-val string_of_mach_reg : machine_register -> string
-val string_of_cache : cache -> string
+val string_of_mach_reg : Register.t -> string
+val string_of_cache : Cache.t -> string
 val num_machine_registers : int
 val num_cache_spaces : int
