@@ -55,9 +55,7 @@ let byte_codes str =
 ;;
 
 let get_global_data64 exe offset =
-  Repr.data64_of_repr64
-    (Repr.repr64_of_obj (Obj.repr (Marshal.from_string exe.data 0)))
-    offset
+  Repr.to_data64 (Repr.of_obj (Obj.repr (Marshal.from_string exe.data 0))) offset
 ;;
 
 let bytecode_exe exe_name =

@@ -78,13 +78,13 @@ exception Alloc_block_from
 
 let get_repr : ?closure:bool -> 'a -> int -> int64 array =
  fun ?(closure = true) a ofs ->
-  try Repr.data64_of_repr64 (Repr.repr64_of_obj ~closure (Obj.repr a)) ofs with
+  try Repr.to_data64 (Repr.of_obj ~closure (Obj.repr a)) ofs with
   | _ -> raise Get_repr
 ;;
 
 let get_obj : ?closure:bool -> state -> int64 -> 'a =
  fun ?(closure = true) st p ->
-  try Obj.magic (Repr.obj_of_repr64 (Repr.repr64_of_data64 ~closure st.memory p)) with
+  try Obj.magic (Repr.to_obj (Repr.of_data64 ~closure st.memory p)) with
   | _ -> raise Get_obj
 ;;
 

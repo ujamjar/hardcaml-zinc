@@ -49,7 +49,7 @@ type state =
   ; alloc_base : int64
   ; stack_high : int64
   ; (* memory *)
-    memory : Repr.memory
+    memory : Memory.t
   ; (* executable *)
     exe : Load.bytecode_exe
   ; mapping : memory_mapping

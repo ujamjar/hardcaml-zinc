@@ -1,12 +1,7 @@
 open Base
 
-val init_memory : Load.bytecode_exe -> int -> Machine.memory_mapping * Repr.memory
-
-val init_state
-  :  Machine.memory_mapping
-  -> Repr.memory
-  -> Load.bytecode_exe
-  -> Machine.state
+val init_memory : Load.bytecode_exe -> int -> Machine.memory_mapping * Memory.t
+val init_state : Machine.memory_mapping -> Memory.t -> Load.bytecode_exe -> Machine.state
 
 module Interp : sig
   open Machine

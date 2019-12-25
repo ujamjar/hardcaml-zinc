@@ -2,11 +2,9 @@
 open Base
 module Obj = Caml.Obj
 
-type memory = (Int64.t, Bigarray.int64_elt, Bigarray.c_layout) Bigarray.Array1.t
-
-type repr64 =
+type t =
   | Flat of Int64.t * Int64.t array
-  | Block of Int64.t * repr64 array
+  | Block of Int64.t * t array
   | Int of Int64.t
 [@@deriving sexp_of]
 
@@ -18,7 +16,7 @@ let int64_of_obj o =
   Int64.(shift_left valhi 1 lor bitlo)
 ;;
 
-let rec repr64_of_obj ?(closure = true) o =
+let rec of_obj ?(closure = true) o =
   if Obj.is_block o
   then (
     let tag, size = Obj.tag o, Obj.size o in
@@ -28,7 +26,7 @@ let rec repr64_of_obj ?(closure = true) o =
     then
       Block
         ( M.make_header (Int64.of_int size) M.white (Int64.of_int tag)
-        , Array.(init size ~f:(fun i -> repr64_of_obj ~closure (Obj.field o i))) )
+        , Array.(init size ~f:(fun i -> of_obj ~closure (Obj.field o i))) )
     else
       Flat
         ( M.make_header (Int64.of_int size) M.white (Int64.of_int tag)
@@ -42,7 +40,7 @@ let obj_of_int64 i =
   if Int64.(i land 1L = 1L) then x else Obj.add_offset x (-1l)
 ;;
 
-let rec obj_of_repr64 r =
+let rec to_obj r =
   match r with
   | Int i -> Obj.repr Int64.(to_int_exn (shift_right i 1))
   | Flat (h, d) ->
@@ -60,12 +58,12 @@ let rec obj_of_repr64 r =
     let b = Obj.new_block (Int64.to_int_exn tag) size in
     (* empty? *)
     for i = 0 to size - 1 do
-      Obj.set_field b i (obj_of_repr64 d.(i))
+      Obj.set_field b i (to_obj d.(i))
     done;
     b
 ;;
 
-let data64_of_repr64 data base_word_offset =
+let to_data64 data base_word_offset =
   let is_int = function
     | Int v -> Some v
     | _ -> None
@@ -120,7 +118,7 @@ let data64_of_repr64 data base_word_offset =
   arr
 ;;
 
-let repr64_of_data64 ?(closure = true) d p =
+let of_data64 ?(closure = true) d p =
   let rec f p =
     if Int64.equal (M.is_block p) 1L
     then (
