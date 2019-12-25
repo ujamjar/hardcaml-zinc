@@ -3,8 +3,14 @@ module Obj = Caml.Obj
 
 (** intermediate representation of ocaml memory values *)
 type t =
-  | Flat of Int64.t * Int64.t array
-  | Block of Int64.t * t array
+  | Flat of
+      { header : Int64.t
+      ; data : Int64.t array
+      }
+  | Block of
+      { header : Int64.t
+      ; data : t array
+      }
   | Int of Int64.t
 [@@deriving sexp_of]
 
