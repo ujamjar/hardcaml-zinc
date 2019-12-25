@@ -38,14 +38,13 @@ let rec repr64_of_obj ?(closure = true) o =
 
 (* danger!!! *)
 let obj_of_int64 i =
-  let open Int64 in
-  let x = Obj.repr (to_int (shift_right i 1)) in
-  if i land 1L = 1L then x else Obj.add_offset x (-1l)
+  let x = Obj.repr Int64.(to_int_exn (shift_right i 1)) in
+  if Int64.(i land 1L = 1L) then x else Obj.add_offset x (-1l)
 ;;
 
 let rec obj_of_repr64 r =
   match r with
-  | Int i -> Obj.repr Int64.(to_int (shift_right i 1))
+  | Int i -> Obj.repr Int64.(to_int_exn (shift_right i 1))
   | Flat (h, d) ->
     let size = Array.length d in
     let tag = M.tag h in

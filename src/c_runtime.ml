@@ -219,13 +219,18 @@ let caml_update_dummy =
       Ok val_unit)
 ;;
 
-let caml_set_oo_id =
+let caml_fresh_oo_id, caml_set_oo_id =
   let c = ref 1L in
-  C1
-    (fun st ptr ->
-      set_field st ptr 1 !c;
-      c := !c +: 2L;
-      Ok ptr)
+  ( C1
+      (fun _ _ ->
+        let oo_id = !c in
+        c := !c +: 2L;
+        Ok oo_id)
+  , C1
+      (fun st ptr ->
+        set_field st ptr 1 !c;
+        c := !c +: 2L;
+        Ok ptr) )
 ;;
 
 let caml_get_section_table = C1 (fun st _ -> caml_raise_not_found st)
@@ -253,9 +258,10 @@ let descr_block st fd =
   p
 ;;
 
-let get_descr x =
+let get_descr fd =
   (* XXX assumption; file_descr <=> int *)
-  (Obj.magic (Int64.to_int (int_val x)) : Unix.file_descr)
+  let fd : int = Int64.to_int_exn (int_val fd) in
+  (Obj.magic fd : Unix.file_descr)
 ;;
 
 let find_chan st p =
@@ -1077,6 +1083,7 @@ let c_calls =
   ; "caml_update_dummy", caml_update_dummy
   ; "caml_register_named_value", c2_unit
   ; "caml_set_oo_id", caml_set_oo_id
+  ; "caml_fresh_oo_id", caml_fresh_oo_id
   ; "caml_get_section_table", caml_get_section_table
   ; "caml_int64_float_of_bits", caml_int64_float_of_bits
   ; "caml_ml_open_descriptor_in", caml_ml_open_descriptor_in
