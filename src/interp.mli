@@ -49,6 +49,7 @@ and sp_st =
   { id : int
   ; cmd : sp_cmd list
   }
+[@@deriving sexp_of]
 
 module State_poly : sig
   include State with type t = sp_t and type st = sp_st
@@ -93,6 +94,7 @@ module Opcodes (M : Monad) : sig
     | `stop
     | `c_call of M.S.t * M.S.t
     ]
+  [@@deriving sexp_of]
 
   type instr = unit M.t
   type arg = M.S.t

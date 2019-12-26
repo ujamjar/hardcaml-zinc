@@ -142,7 +142,7 @@ and sp_st =
   { id : int
   ; cmd : sp_cmd list
   }
-[@@deriving equal, compare]
+[@@deriving sexp_of, equal, compare]
 
 module State_poly = struct
   type t = sp_t [@@deriving equal, compare]
@@ -421,8 +421,9 @@ module Opcodes (M : Monad) = struct
   type returns =
     [ `step
     | `stop
-    | `c_call of M.S.t * M.S.t
+    | `c_call of (M.S.t * M.S.t[@sexp.opaque])
     ]
+  [@@deriving sexp_of]
 
   (* nargs, prim *)
 
