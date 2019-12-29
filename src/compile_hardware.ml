@@ -3,6 +3,9 @@
 open Base
 open Interp
 
+(* Because we are building a 64 bit interpreter. We should look at a 32 bit one
+   as well. *)
+let dbits = 64
 let _initr x = Array.init Machine.num_machine_registers ~f:(fun _ -> x)
 let getr a i = a.(Machine.Register.Variants.to_rank i)
 let setr a i v = a.(Machine.Register.Variants.to_rank i) <- v
@@ -10,105 +13,128 @@ let _initc x = Array.init Machine.num_cache_spaces ~f:(fun _ -> x)
 let _getc a i = a.(Machine.Cache.Variants.to_rank i)
 let _setc a i v = a.(Machine.Cache.Variants.to_rank i) <- v
 
-(* schedule the instructions according to dependancies.
+module Expression = struct
+  let is_const = function
+    | Const _ -> true
+    | _ -> false
+  ;;
 
-      We can do this according to the indices assigned to commands as an initial
-      approximation.  This will include machine register reads which in fact are
-      a bit different as they should really only affect the schedule after a write.
-   *)
+  let const_value = function
+    | Const n -> n
+    | _ -> failwith "expr is not a constant"
+  ;;
 
-let expr_is_const = function
-  | Const _ -> true
-  | _ -> false
-;;
+  let const_equals e n =
+    match e with
+    | Const m when n = m -> true
+    | _ -> false
+  ;;
 
-let expr_val = function
-  | Const n -> n
-  | _ -> failwith "expr is not a constant"
-;;
+  let rec deps e =
+    match e with
+    | Op (_, e0, e1) -> deps e0 @ deps e1
+    | Val id -> [ id ]
+    | Const _ -> []
+  ;;
 
-let expr_is e n =
-  match e with
-  | Const m when n = m -> true
-  | _ -> false
-;;
+  let eval op e0 e1 =
+    if is_const e0 && is_const e1
+    then (
+      let e0, e1 = const_value e0, const_value e1 in
+      match op with
+      | "+" -> Some (Const (e0 + e1))
+      | "-" -> Some (Const (e0 - e1))
+      | "*" -> Some (Const (e0 * e1))
+      | "/" -> Some (Const (e0 / e1))
+      | "%" -> Some (Const (e0 % e1))
+      | "&" -> Some (Const (e0 land e1))
+      | "|" -> Some (Const (e0 lor e1))
+      | "^" -> Some (Const (e0 lxor e1))
+      | "~" -> Some (Const (lnot e0))
+      | "<<" -> Some (Const (e0 lsl e1))
+      | ">>" -> Some (Const (e0 lsr e1))
+      | ">>+" -> Some (Const (e0 asr e1))
+      | "==" -> Some (Const (if e0 = e1 then 1 else 0))
+      | "<>" -> Some (Const (if e0 <> e1 then 1 else 0))
+      | _ -> None)
+    else None
+  ;;
 
-let const_eval op e0 e1 =
-  if expr_is_const e0 && expr_is_const e1
-  then (
-    let e0, e1 = expr_val e0, expr_val e1 in
-    match op with
-    | "+" -> Some (Const (e0 + e1))
-    | "-" -> Some (Const (e0 - e1))
-    | "*" -> Some (Const (e0 * e1))
-    | "/" -> Some (Const (e0 / e1))
-    | "%" -> Some (Const (e0 % e1))
-    | "&" -> Some (Const (e0 land e1))
-    | "|" -> Some (Const (e0 lor e1))
-    | "^" -> Some (Const (e0 lxor e1))
-    | "~" -> Some (Const (lnot e0))
-    | "<<" -> Some (Const (e0 lsl e1))
-    | ">>" -> Some (Const (e0 lsr e1))
-    | ">>+" -> Some (Const (e0 asr e1))
-    | "==" -> Some (Const (if e0 = e1 then 1 else 0))
-    | "<>" -> Some (Const (if e0 <> e1 then 1 else 0))
-    | _ -> None)
-  else None
-;;
+  let rec simplify e =
+    match e with
+    | Op (op, e0, e1) ->
+      let e0, e1 = simplify e0, simplify e1 in
+      (match eval op e0 e1 with
+      | Some e -> e
+      | None ->
+        (match op with
+        | "+" when const_equals e0 0 -> e1 (* a + 0 = a *)
+        | "+" when const_equals e1 0 -> e0 (* 0 + a = a *)
+        | "-" when const_equals e1 0 -> e0 (* a - 0 = a *)
+        | "*" when const_equals e1 1 -> e0 (* a * 1 = a *)
+        | "*" when const_equals e0 1 -> e1 (* 1 * a = a *)
+        | "/" when const_equals e1 1 -> e0 (* a / 1 = a *)
+        | "<<" when const_equals e1 0 -> e1 (* a lsl 0 = a *)
+        | ">>" when const_equals e1 0 -> e1 (* a lsr 0 = a *)
+        | ">>+" when const_equals e1 0 -> e1 (* a asr 0 = a *)
+        | _ -> Op (op, e0, e1)))
+    | Const _ -> e
+    | Val _ -> e
+  ;;
 
-let rec simplify_expr e =
-  match e with
-  | Op (op, e0, e1) ->
-    let e0, e1 = simplify_expr e0, simplify_expr e1 in
-    (match const_eval op e0 e1 with
-    | Some e -> e
-    | None ->
+  module S = Hardcaml.Signal
+
+  let rec compile env = function
+    | Interp.Op (op, a', b') ->
+      let a, b =
+        try compile env a', compile env b' with
+        | _ -> failwith "failed to look up subexpression"
+      in
       (match op with
-      | "+" when expr_is e0 0 -> e1 (* a + 0 = a *)
-      | "+" when expr_is e1 0 -> e0 (* 0 + a = a *)
-      | "-" when expr_is e1 0 -> e0 (* a - 0 = a *)
-      | "*" when expr_is e1 1 -> e0 (* a * 1 = a *)
-      | "*" when expr_is e0 1 -> e1 (* 1 * a = a *)
-      | "/" when expr_is e1 1 -> e0 (* a / 1 = a *)
-      | "<<" when expr_is e1 0 -> e1 (* a lsl 0 = a *)
-      | ">>" when expr_is e1 0 -> e1 (* a lsr 0 = a *)
-      | ">>+" when expr_is e1 0 -> e1 (* a asr 0 = a *)
-      | _ -> Op (op, e0, e1)))
-  | Const _ -> e
-  | Val _ -> e
-;;
+      | "+" -> S.( +: ) a b
+      | "-" -> S.( -: ) a b
+      | ">>" -> S.srl a (const_value b')
+      | ">>+" -> S.sra a (const_value b')
+      | "<<" -> S.sll a (const_value b')
+      | _ -> failwith ("unknown expression operator '" ^ op ^ "'"))
+    | Val id ->
+      (match Map.find env id with
+      | Some x -> x
+      | None -> failwith ("cant find variable " ^ Int.to_string id))
+    | Const x -> S.consti ~width:dbits x
+  ;;
+end
 
-let rec expr_deps e =
-  match e with
-  | Op (_, e0, e1) -> expr_deps e0 @ expr_deps e1
-  | Val id -> [ id ]
-  | Const _ -> []
-;;
+module Statement = struct
+  let rec deps x =
+    match x with
+    | Get_reg (_, _) -> `cmd (x, [])
+    | Set_reg (_, value) -> `cmd (x, Expression.deps value)
+    | Get_mem (_, _, addr) -> `cmd (x, Expression.deps addr)
+    | Set_mem (_, addr, value) -> `cmd (x, Expression.deps addr @ Expression.deps value)
+    | Cond (c, t, f) ->
+      `cond (x, Expression.deps c, List.map t ~f:deps, List.map f ~f:deps)
+    | Iter (_, _, f, t, c) ->
+      `iter (x, Expression.deps f @ Expression.deps t, List.map c ~f:deps)
+  ;;
 
-let rec _stat_deps x =
-  match x with
-  | Get_reg (_, _) -> `cmd (x, [])
-  | Set_reg (_, value) -> `cmd (x, expr_deps value)
-  | Get_mem (_, _, addr) -> `cmd (x, expr_deps addr)
-  | Set_mem (_, addr, value) -> `cmd (x, expr_deps addr @ expr_deps value)
-  | Cond (c, t, f) ->
-    `cond (x, expr_deps c, List.map t ~f:_stat_deps, List.map f ~f:_stat_deps)
-  | Iter (_, _, f, t, c) -> `iter (x, expr_deps f @ expr_deps t, List.map c ~f:_stat_deps)
-;;
+  (* XXX I am not sure if this is either needed or useful in it's current form.*)
+  let _ = deps
 
-let rec simplify_stat = function
-  | Get_reg (id, reg) -> Get_reg (id, reg)
-  | Set_reg (reg, value) -> Set_reg (reg, simplify_expr value)
-  | Get_mem (id, cache, addr) -> Get_mem (id, cache, simplify_expr addr)
-  | Set_mem (cache, addr, value) ->
-    Set_mem (cache, simplify_expr addr, simplify_expr value)
-  | Cond (c, t, f) -> Cond (simplify_expr c, simplify_stats t, simplify_stats f)
-  | Iter (ud, id, f, t, c) ->
-    Iter (ud, id, simplify_expr f, simplify_expr t, simplify_stats c)
+  let rec simplify_stat = function
+    | Get_reg (id, reg) -> Get_reg (id, reg)
+    | Set_reg (reg, value) -> Set_reg (reg, Expression.simplify value)
+    | Get_mem (id, cache, addr) -> Get_mem (id, cache, Expression.simplify addr)
+    | Set_mem (cache, addr, value) ->
+      Set_mem (cache, Expression.simplify addr, Expression.simplify value)
+    | Cond (c, t, f) -> Cond (Expression.simplify c, simplify_stats t, simplify_stats f)
+    | Iter (ud, id, f, t, c) ->
+      Iter (ud, id, Expression.simplify f, Expression.simplify t, simplify_stats c)
 
-and simplify_stats x = List.map x ~f:simplify_stat
+  and simplify_stats x = List.map x ~f:simplify_stat
 
-let simplify st = { st with cmd = simplify_stats st.cmd }
+  let simplify st = { st with cmd = simplify_stats st.cmd }
+end
 
 (* 
       Lets try to understand the problems here.
@@ -179,8 +205,6 @@ type env =
   ; regs : t array
   }
 
-let dbits = 64 (* XXX *)
-
 let _init_env () =
   { id_to_wire = Map.empty (module Int)
   ; regs =
@@ -217,29 +241,6 @@ let print_states sts =
 
 let compile st =
   let cmd = State_poly.normalise st.cmd in
-  let const_val = function
-    | Interp.Const x -> x
-    | _ -> failwith "not a constant expression"
-  in
-  let rec compile_expr env = function
-    | Interp.Op (op, a', b') ->
-      let a, b =
-        try compile_expr env a', compile_expr env b' with
-        | _ -> failwith "failed to look up subexpression"
-      in
-      (match op with
-      | "+" -> a +: b
-      | "-" -> a -: b
-      | ">>" -> srl a (const_val b')
-      | ">>+" -> sra a (const_val b')
-      | "<<" -> sll a (const_val b')
-      | _ -> failwith ("unknown expression operator '" ^ op ^ "'"))
-    | Val id ->
-      (match Map.find env.id_to_wire id with
-      | Some x -> x
-      | None -> failwith ("cant find variable " ^ Int.to_string id))
-    | Const x -> consti ~width:dbits x
-  in
   let rec _compile_stats env = function
     | [] -> env
     (* (psuedo-) update registers and expressions *)
@@ -251,7 +252,7 @@ let compile st =
       in
       _compile_stats env t
     | Set_reg (reg, vl) :: t ->
-      setr env.regs reg (compile_expr env vl);
+      setr env.regs reg (Expression.compile env.id_to_wire vl);
       _compile_stats env t
     (* memory io and state completion *)
     | Get_mem (id, _, _) :: t ->
@@ -295,7 +296,7 @@ let compile st =
       compile_states (ns, rs, st :: sts) [] t
     | Iter _ :: _ -> failwith "not sure about iter yet!"
   in
-  (*compile_stats (init_env ()) cmd*)
+  (* _compile_stats (init_env ()) cmd*)
   let _, _, sts = compile_states (0, 0, []) [] cmd in
   let sts = List.sort ~compare:(fun a b -> Int.compare a.n b.n) sts in
   let () = print_states sts in

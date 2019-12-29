@@ -14,7 +14,7 @@ module O = Interp.Opcodes (M)
 let show instr =
   try
     let s = O.dispatch instr Interp.State_poly.empty in
-    snd s |> Compile_hardware.simplify |> Interp.State_poly.print;
+    snd s |> Compile_hardware.Statement.simplify |> Interp.State_poly.print;
     printf "\n";
     print_s [%message "" ~_:(s : O.returns * Interp.sp_st)];
     printf "\n"
