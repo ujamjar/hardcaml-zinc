@@ -1,0 +1,4 @@
+(executable
+ (name monadinterp)
+ (libraries compiler-libs.bytecomp hardcaml_zinc)
+ )

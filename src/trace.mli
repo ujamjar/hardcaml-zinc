@@ -1,10 +1,7 @@
+open Base
+
 val showfields : bool ref
-
-val value : ?chan:out_channel -> Machine.state -> int64 -> unit
-
-val machine : ?chan:out_channel -> Machine.state -> unit
-
-val root : ?chan:out_channel -> Machine.state -> int64 -> unit
-
-val instr : ?chan:out_channel -> Machine.state -> unit
-
+val value : ?chan:Stdio.Out_channel.t -> Machine.state -> Int64.t -> unit
+val machine : ?chan:Stdio.Out_channel.t -> Machine.state -> unit
+val root : ?chan:Stdio.Out_channel.t -> Machine.state -> Int64.t -> unit
+val instr : ?chan:Stdio.Out_channel.t -> Machine.state -> unit

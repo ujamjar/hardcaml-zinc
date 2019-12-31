@@ -3,26 +3,28 @@
  *
  *)
 
+open Base
 open Machine
 
+let stdout = Stdio.Out_channel.stdout
+
 module type State = sig
-
   type st
-  include Ops.S 
 
+  include Ops.S
 
   (* machine registers *)
 
-  val get_reg : st -> machine_register -> t * st
-  val set_reg : st -> machine_register -> t -> st
+  val get_reg : st -> Machine.Register.t -> t * st
+  val set_reg : st -> Machine.Register.t -> t -> st
 
   (* memory access *)
 
-  val get_mem : st -> cache -> t -> t * st
-  val set_mem : st -> cache -> t -> t -> st
+  val get_mem : st -> Machine.Cache.t -> t -> t * st
+  val set_mem : st -> Machine.Cache.t -> t -> t -> st
 
   (* control *)
-  
+
   val cond : st -> t -> (st -> unit * st) -> (st -> unit * st) -> st
   val iter_up : st -> t -> t -> (t -> st -> unit * st) -> st
   val iter_dn : st -> t -> t -> (t -> st -> unit * st) -> st
@@ -34,366 +36,396 @@ module type State = sig
   (* debugging *)
 
   val string_of_value : t -> string
-
 end
 
 module State_eval = struct
-  
-  type st = Machine.state 
+  type st = Machine.state
 
-  let get_reg st r = 
+  let get_reg st (r : Machine.Register.t) =
     match r with
-    | `accu -> st.accu, st
-    | `env -> st.env, st
-    | `pc -> st.pc, st
-    | `sp -> st.sp, st
-    | `extra_args -> st.extra_args, st
-    | `trapsp -> st.trapsp, st
-    | `global_data -> st.global_data, st
-    | `atom_table -> st.atom_table, st
-    | `alloc_base -> st.alloc_base, st
-    | `stack_high -> st.stack_high, st
+    | Accu -> st.accu, st
+    | Env -> st.env, st
+    | Pc -> st.pc, st
+    | Sp -> st.sp, st
+    | Extra_args -> st.extra_args, st
+    | Trapsp -> st.trapsp, st
+    | Global_data -> st.global_data, st
+    | Atom_table -> st.atom_table, st
+    | Alloc_base -> st.alloc_base, st
+    | Stack_high -> st.stack_high, st
+  ;;
 
-  let set_reg st r v = 
+  let set_reg st (r : Machine.Register.t) v =
     match r with
-    | `accu -> { st with accu = v }
-    | `env -> { st with env = v }
-    | `pc -> { st with pc = v } 
-    | `sp -> { st with sp = v }
-    | `extra_args -> { st with extra_args = v }
-    | `trapsp -> { st with trapsp = v }
-    | `global_data -> failwith "cannot write to global data pointer"
-    | `atom_table -> failwith "cannot write to atom table pointer"
-    | `alloc_base -> { st with alloc_base = v }
-    | `stack_high -> failwith "cannot write to stack_high pointer"
+    | Accu -> { st with accu = v }
+    | Env -> { st with env = v }
+    | Pc -> { st with pc = v }
+    | Sp -> { st with sp = v }
+    | Extra_args -> { st with extra_args = v }
+    | Trapsp -> { st with trapsp = v }
+    | Global_data -> failwith "cannot write to global data pointer"
+    | Atom_table -> failwith "cannot write to atom table pointer"
+    | Alloc_base -> { st with alloc_base = v }
+    | Stack_high -> failwith "cannot write to stack_high pointer"
+  ;;
 
-  let get_mem st cache adr = 
-    try
-      st.memory.{Int64.to_int adr}, st
-    with Invalid_argument x ->
+  let get_mem st _cache adr =
+    try st.memory.{Int64.to_int_exn adr}, st with
+    | Invalid_argument x ->
       raise (Invalid_argument ("get_mem {" ^ Int64.to_string adr ^ "} " ^ x))
+  ;;
 
-  let set_mem st cache adr v = 
+  let set_mem st _cache adr v =
     try
-      st.memory.{Int64.to_int adr} <- v; st 
-    with Invalid_argument x ->
+      st.memory.{Int64.to_int_exn adr} <- v;
+      st
+    with
+    | Invalid_argument x ->
       raise (Invalid_argument ("set_mem {" ^ Int64.to_string adr ^ "} " ^ x))
+  ;;
 
-  let cond st c t f = 
-    snd @@ if c <> 0L then t st else f st
+  let cond st c t f = snd @@ if not (Int64.equal c 0L) then t st else f st
 
-  let iter_up st m n f = 
-    let rec g st i = 
-      if i >= n then st
-      else
+  let iter_up st m n f =
+    let rec g st i =
+      if Int64.(compare i n) >= 0
+      then st
+      else (
         let _, st = f i st in
-        g st (Int64.add i 1L)
+        g st Int64.(i + 1L))
     in
-    (g st m)
+    g st m
+  ;;
 
-  let iter_dn st m n f = 
-    let rec g st i = 
-      if i < n then st
-      else
+  let iter_dn st m n f =
+    let rec g st i =
+      if Int64.compare i n < 0
+      then st
+      else (
         let _, st = f i st in
-        g st (Int64.sub i 1L)
+        g st Int64.(i - 1L))
     in
-    (g st m)
+    g st m
+  ;;
 
   include Ops.Int64
 
-  let dynmet st meths hi = 
+  let dynmet st meths hi =
     let li = ref 3L in
     let hi = ref hi in
     let mi = ref 0L in
-    while (!li < !hi) do
-      mi := (sra (!li +: !hi) 1L) |: 1L;
-      let fld,_ = get_mem st `mem ((srl meths 3L) +: !mi) in
-      if 1L = (st.accu <+ fld) then hi := !mi -: (const 2)
-      else li := !mi
+    while Int64.compare !li !hi < 0 do
+      mi := sra (!li +: !hi) 1L |: 1L;
+      let fld, _ = get_mem st `mem (srl meths 3L +: !mi) in
+      if Int64.equal 1L (st.accu <+ fld) then hi := !mi -: const 2 else li := !mi
     done;
     !li, st
+  ;;
 
   let string_of_value = Int64.to_string
-
 end
 
-type sp_cmd = 
-  | Get_reg of int * machine_register 
-  | Set_reg of machine_register * sp_t
-  | Get_mem of int * cache * sp_t
-  | Set_mem of cache * sp_t * sp_t
+type sp_cmd =
+  | Get_reg of int * Machine.Register.t
+  | Set_reg of Machine.Register.t * sp_t
+  | Get_mem of int * Machine.Cache.t * sp_t
+  | Set_mem of Machine.Cache.t * sp_t * sp_t
   | Cond of sp_t * sp_cmd list * sp_cmd list
   | Iter of bool * int * sp_t * sp_t * sp_cmd list
-and sp_t = 
+
+and sp_t =
   | Op of string * sp_t * sp_t
   | Val of int
   | Const of int
-and sp_st = 
-  {
-    id : int;
-    cmd : sp_cmd list;
+
+and sp_st =
+  { id : int
+  ; cmd : sp_cmd list
   }
+[@@deriving sexp_of, equal, compare]
 
 module State_poly = struct
-
-  type t = sp_t
+  type t = sp_t [@@deriving equal, compare]
   type st = sp_st
 
-  let empty = { id=0; cmd=[] }
-    
-  let get_reg st r = 
-    let x = Get_reg(st.id,r) in 
-    (Val st.id), { id=st.id+1; cmd=x::st.cmd }
+  let empty = { id = 0; cmd = [] }
 
-  let set_reg st r v = { st with cmd = Set_reg(r, v) :: st.cmd }
+  let get_reg st r =
+    let x = Get_reg (st.id, r) in
+    Val st.id, { id = st.id + 1; cmd = x :: st.cmd }
+  ;;
 
-  let get_mem st c adr = 
-    let x = Get_mem(st.id, c, adr) in 
-    (Val st.id), { id=st.id+1; cmd=x::st.cmd }
+  let set_reg st r v = { st with cmd = Set_reg (r, v) :: st.cmd }
 
-  let set_mem st c adr v = { st with cmd = Set_mem(c, adr, v) :: st.cmd }
+  let get_mem st c adr =
+    let x = Get_mem (st.id, c, adr) in
+    Val st.id, { id = st.id + 1; cmd = x :: st.cmd }
+  ;;
 
-  let cond st c t f = 
-    let (),st_t = t {id = st.id; cmd = []} in
-    let (),st_f = f {id = st_t.id; cmd = []} in
-    { id = st_f.id; cmd = Cond(c,st_t.cmd,st_f.cmd)::st.cmd }
+  let set_mem st c adr v = { st with cmd = Set_mem (c, adr, v) :: st.cmd }
+
+  let cond st c t f =
+    let (), st_t = t { id = st.id; cmd = [] } in
+    let (), st_f = f { id = st_t.id; cmd = [] } in
+    { id = st_f.id; cmd = Cond (c, st_t.cmd, st_f.cmd) :: st.cmd }
+  ;;
 
   let iter dirn st m n f =
     let tmp_id = st.id in
-    let _, st_body = f (Val tmp_id) { id = st.id+1; cmd = [] } in (* eval the body *)
-    { st_body with cmd = Iter(dirn, tmp_id, m, n, st_body.cmd) :: st.cmd }
+    let _, st_body = f (Val tmp_id) { id = st.id + 1; cmd = [] } in
+    (* eval the body *)
+    { st_body with cmd = Iter (dirn, tmp_id, m, n, st_body.cmd) :: st.cmd }
+  ;;
 
   let iter_up st m n f = iter true st m n f
   let iter_dn st m n f = iter false st m n f
+  let dynmet _st _meths _hi = failwith "DYNMET" (* XXX TODO *)
 
-  let dynmet st meths hi = failwith "DYNMET" (* XXX TODO *)
-
-  let const i = Const(i)
+  let const i = Const i
   let zero = const 0
   let one = const 1
-
-  let ( +: ) a b = Op("+", a, b)
-  let ( -: ) a b = Op("-", a, b)
-  let ( *: ) a b = Op("*", a, b)
-  let ( /: ) a b = Op("/", a, b)
-  let ( %: ) a b = Op("%", a, b)
-  let ( &: ) a b = Op("&", a, b)
-  let ( |: ) a b = Op("|", a, b)
-  let ( ^: ) a b = Op("^", a, b)
-  let ( ~: ) a   = Op("~", a, a)
-
-  let sll a b = Op("<<",  a, b)
-  let srl a b = Op(">>",  a, b)
-  let sra a b = Op(">>+", a, b)
-
-  let (==:) a b = Op("==", a, b)
-  let (<>:) a b = Op("<>", a, b)
-
-  let (<+)  a b = Op("<+",  a, b)
-  let (<=+) a b = Op("<=+", a, b)
-  let (>+)  a b = Op(">+",  a, b)
-  let (>=+) a b = Op(">=+", a, b)
-
-  let (<:)  a b = Op("<",  a, b)
-  let (<=:) a b = Op("<=", a, b)
-  let (>:)  a b = Op(">",  a, b)
-  let (>=:) a b = Op(">=", a, b)
+  let ( +: ) a b = Op ("+", a, b)
+  let ( -: ) a b = Op ("-", a, b)
+  let ( *: ) a b = Op ("*", a, b)
+  let ( /: ) a b = Op ("/", a, b)
+  let ( %: ) a b = Op ("%", a, b)
+  let ( &: ) a b = Op ("&", a, b)
+  let ( |: ) a b = Op ("|", a, b)
+  let ( ^: ) a b = Op ("^", a, b)
+  let ( ~: ) a = Op ("~", a, a)
+  let sll a b = Op ("<<", a, b)
+  let srl a b = Op (">>", a, b)
+  let sra a b = Op (">>+", a, b)
+  let ( ==: ) a b = Op ("==", a, b)
+  let ( <>: ) a b = Op ("<>", a, b)
+  let ( <+ ) a b = Op ("<+", a, b)
+  let ( <=+ ) a b = Op ("<=+", a, b)
+  let ( >+ ) a b = Op (">+", a, b)
+  let ( >=+ ) a b = Op (">=+", a, b)
+  let ( <: ) a b = Op ("<", a, b)
+  let ( <=: ) a b = Op ("<=", a, b)
+  let ( >: ) a b = Op (">", a, b)
+  let ( >=: ) a b = Op (">=", a, b)
 
   let rec string_of_value = function
-    | Op(o,a,b) -> "(" ^ string_of_value a ^ o ^ string_of_value b ^ ")"
-    | Val(i) -> "_" ^ string_of_int i
-    | Const i -> string_of_int i
+    | Op (o, a, b) -> "(" ^ string_of_value a ^ o ^ string_of_value b ^ ")"
+    | Val i -> "_" ^ Int.to_string i
+    | Const i -> Int.to_string i
+  ;;
 
-  let rec normalise cmd = 
-    List.rev @@
-      List.map (function 
-        | Cond(c,t,f) -> Cond(c, normalise t, normalise f)
-        | Iter(a,b,c,d,e) -> Iter(a,b,c,d, normalise e)
-        | _ as x -> x) cmd
+  let rec normalise cmd =
+    List.rev
+    @@ List.map cmd ~f:(function
+           | Cond (c, t, f) -> Cond (c, normalise t, normalise f)
+           | Iter (a, b, c, d, e) -> Iter (a, b, c, d, normalise e)
+           | _ as x -> x)
+  ;;
 
-  let rec print lev st = 
-    let open Printf in
+  let rec print lev st =
     let pad = String.make lev ' ' in
-    List.iter (function
-      | Get_reg(i,r) -> printf "%s_%i = %s;\n" pad i (string_of_mach_reg r)
-      | Set_reg(r,v) -> printf "%s%s = %s;\n" pad (string_of_mach_reg r) (string_of_value v)
-      | Get_mem(i,c,a) -> printf "%s_%i = %s[%s];\n" pad i (string_of_cache c) (string_of_value a)
-      | Set_mem(c,a,v) -> printf "%s%s[%s] = %s;\n" pad
-        (string_of_cache c) (string_of_value a) (string_of_value v)
-      | Cond(c,t,f) -> 
-        printf "%sif %s then\n" pad (string_of_value c); 
-        print (lev+2) t;
-        printf "%selse\n" pad;
-        print (lev+2) f;
-        printf "%send\n" pad
-      | Iter(d, i, m, n, b) ->
-        printf "%sfor _%i=[%s %s %s] do\n" pad i (string_of_value m) 
-          (if d then "to" else "downto") (string_of_value n);
-        print (lev+2) b;
-        printf "%sdone\n" pad
-      )
-      st
+    List.iter st ~f:(function
+        | Get_reg (i, r) -> Stdio.printf "%s_%i = %s;\n" pad i (string_of_mach_reg r)
+        | Set_reg (r, v) ->
+          Stdio.printf "%s%s = %s;\n" pad (string_of_mach_reg r) (string_of_value v)
+        | Get_mem (i, c, a) ->
+          Stdio.printf "%s_%i = %s[%s];\n" pad i (string_of_cache c) (string_of_value a)
+        | Set_mem (c, a, v) ->
+          Stdio.printf
+            "%s%s[%s] = %s;\n"
+            pad
+            (string_of_cache c)
+            (string_of_value a)
+            (string_of_value v)
+        | Cond (c, t, f) ->
+          Stdio.printf "%sif %s then\n" pad (string_of_value c);
+          print (lev + 2) t;
+          Stdio.printf "%selse\n" pad;
+          print (lev + 2) f;
+          Stdio.printf "%send\n" pad
+        | Iter (d, i, m, n, b) ->
+          Stdio.printf
+            "%sfor _%i=[%s %s %s] do\n"
+            pad
+            i
+            (string_of_value m)
+            (if d then "to" else "downto")
+            (string_of_value n);
+          print (lev + 2) b;
+          Stdio.printf "%sdone\n" pad)
+  ;;
 
   let print st = print 0 (normalise st.cmd)
-
 end
 
 module type Monad = sig
   module S : State
 
-  type 'a t = S.st -> ('a * S.st)
+  type 'a t = S.st -> 'a * S.st
+
   val bind : 'a t -> ('a -> 'b t) -> 'b t
   val return : 'a -> 'a t
-  val (>>=) : 'a t -> ('a -> 'b t) -> 'b t
-  val (>>) : 'a t -> 'b t -> 'b t
-
+  val ( >>= ) : 'a t -> ('a -> 'b t) -> 'b t
+  val ( >> ) : 'a t -> 'b t -> 'b t
   val if_ : S.t -> unit t -> unit t -> unit t
   val for_up : S.t -> S.t -> (S.t -> unit t) -> unit t
   val for_dn : S.t -> S.t -> (S.t -> unit t) -> unit t
-
   val step : S.st -> 'a t -> 'a * S.st
-
   val trace : bool
   val debug : string -> unit t
-
-  val write_reg : machine_register -> S.t -> unit t
-  val read_reg : machine_register -> S.t t
-  val modify_reg : machine_register -> (S.t -> S.t) -> unit t
-
-  val read_mem : cache -> S.t -> S.t t
-  val write_mem : cache -> S.t -> S.t -> unit t
-
+  val write_reg : Machine.Register.t -> S.t -> unit t
+  val read_reg : Machine.Register.t -> S.t t
+  val modify_reg : Machine.Register.t -> (S.t -> S.t) -> unit t
+  val read_mem : Machine.Cache.t -> S.t -> S.t t
+  val write_mem : Machine.Cache.t -> S.t -> S.t -> unit t
   val read_bytecode : S.t -> S.t t
-
   val dynmet : S.t -> S.t -> S.t t
+end
 
-end 
-  
-module Monad(T : sig val trace : bool end)(S : State) = struct
+module Monad (T : sig
+  val trace : bool
+end)
+(S : State) =
+struct
   module S = S
 
-  type 'a t = S.st -> ('a * S.st)
+  type 'a t = S.st -> 'a * S.st
 
-  let bind m f =
-    fun s ->
-      let x, s = m s in
-      f x s
+  let bind m f s =
+    let x, s = m s in
+    f x s
+  ;;
 
-  let return a = fun s -> (a, s)
-
+  let return a s = a, s
   let step st m = m st
+  let ( >>= ) = bind
+  let ( >> ) m f = bind m (fun _ -> f)
 
-  let (>>=) = bind
-  let (>>) m f = bind m (fun _ -> f)
+  let debug s st =
+    ( (Stdio.Out_channel.output_string stdout s;
+       Stdio.Out_channel.flush stdout)
+    , st )
+  ;;
 
-  let debug s st = ((output_string stdout s; flush stdout), st)
-
-  let if_ c t f st = 
-    ((), S.cond st c t f)
-
-  let for_up m n f st = ((), S.iter_up st m n f)
-  let for_dn m n f st = ((), S.iter_dn st m n f)
-
+  let if_ c t f st = (), S.cond st c t f
+  let for_up m n f st = (), S.iter_up st m n f
+  let for_dn m n f st = (), S.iter_dn st m n f
   let read_reg r st = S.get_reg st r
-
-  let write_reg r v st = ((), S.set_reg st r v)
-
+  let write_reg r v st = (), S.set_reg st r v
   let c3, c32 = S.const 3, S.const 32
-
-  let read_mem cache adr st = 
-    S.get_mem st cache (S.srl adr c3) 
-
-  let write_mem cache adr value st = 
-    ((), S.set_mem st cache (S.srl adr c3) value)
+  let read_mem cache adr st = S.get_mem st cache (S.srl adr c3)
+  let write_mem cache adr value st = (), S.set_mem st cache (S.srl adr c3) value
 
   (* move logic into state *)
-  let read_bytecode adr st = 
+  let read_bytecode adr st =
     let open S in
-    let ins,st = S.get_mem st `program (srl adr c3) in
-    let sel = adr &: (const 4) in
-    let ins = sra (if sel = zero then sll ins c32 else ins) c32 in
-    (ins, st)
+    let ins, st = S.get_mem st Program (srl adr c3) in
+    let sel = adr &: const 4 in
+    let ins = sra (if S.equal sel zero then sll ins c32 else ins) c32 in
+    ins, st
+  ;;
 
   let dynmet meths hi st = S.dynmet st meths hi
 
   (* XXX DEBUG XXX *)
   let trace = T.trace
 
-  let read_reg arg = 
-    if trace then
-      read_reg arg >>= fun v -> 
-      debug ("read_reg " ^ string_of_mach_reg arg ^ " " ^ S.string_of_value v ^ "\n") >> 
-      return v
-    else
+  let read_reg arg =
+    if trace
+    then
       read_reg arg
+      >>= fun v ->
+      debug ("read_reg " ^ string_of_mach_reg arg ^ " " ^ S.string_of_value v ^ "\n")
+      >> return v
+    else read_reg arg
+  ;;
 
-  let write_reg arg v = 
-    if trace then
-      debug ("write_reg " ^ string_of_mach_reg arg ^ " " ^ 
-                            S.string_of_value v ^"\n") >> write_reg arg v
-    else
-      write_reg arg v
+  let write_reg arg v =
+    if trace
+    then
+      debug ("write_reg " ^ string_of_mach_reg arg ^ " " ^ S.string_of_value v ^ "\n")
+      >> write_reg arg v
+    else write_reg arg v
+  ;;
 
-  let read_mem cache adr = 
-    if trace then
-      read_mem cache adr >>= fun v ->
-      debug ("read_mem " ^ string_of_cache cache ^ " " ^ S.string_of_value adr ^ 
-                                                   " " ^ S.string_of_value v ^ "\n") >>
-      return v
-    else
+  let read_mem cache adr =
+    if trace
+    then
       read_mem cache adr
+      >>= fun v ->
+      debug
+        ("read_mem "
+        ^ string_of_cache cache
+        ^ " "
+        ^ S.string_of_value adr
+        ^ " "
+        ^ S.string_of_value v
+        ^ "\n")
+      >> return v
+    else read_mem cache adr
+  ;;
 
-  let write_mem cache adr v = 
-    if trace then
-      debug ("write_mem " ^ string_of_cache cache ^ " " ^ S.string_of_value adr ^ 
-                                                    " " ^ S.string_of_value v ^ "\n") >>
-      write_mem cache adr v
-    else
-      write_mem cache adr v
+  let write_mem cache adr v =
+    if trace
+    then
+      debug
+        ("write_mem "
+        ^ string_of_cache cache
+        ^ " "
+        ^ S.string_of_value adr
+        ^ " "
+        ^ S.string_of_value v
+        ^ "\n")
+      >> write_mem cache adr v
+    else write_mem cache adr v
+  ;;
 
-  let if_ c a b = 
-    if trace then debug ("if_ " ^ S.string_of_value c ^ "\n") >> if_ c a b
-    else if_ c a b
+  let if_ c a b =
+    if trace then debug ("if_ " ^ S.string_of_value c ^ "\n") >> if_ c a b else if_ c a b
+  ;;
 
-  let for_up m n f = 
-    if trace then
-      debug ("for_up " ^ S.string_of_value m ^ ".." ^ S.string_of_value n ^ "\n") >>
-      for_up m n f
-    else
-      for_up m n f
+  let for_up m n f =
+    if trace
+    then
+      debug ("for_up " ^ S.string_of_value m ^ ".." ^ S.string_of_value n ^ "\n")
+      >> for_up m n f
+    else for_up m n f
+  ;;
 
-  let for_dn m n f = 
-    if trace then
-      debug ("for_dn " ^ S.string_of_value m ^ ".." ^ S.string_of_value n ^ "\n") >>
-      for_dn m n f
-    else
-      for_dn m n f
+  let for_dn m n f =
+    if trace
+    then
+      debug ("for_dn " ^ S.string_of_value m ^ ".." ^ S.string_of_value n ^ "\n")
+      >> for_dn m n f
+    else for_dn m n f
+  ;;
 
-  let read_bytecode adr = 
-    if trace then
-      read_bytecode adr >>= fun v ->
-      debug ("read_bytecode " ^ S.string_of_value adr ^ " " ^ S.string_of_value v ^ "\n") >>
-      return v
-    else
+  let read_bytecode adr =
+    if trace
+    then
       read_bytecode adr
+      >>= fun v ->
+      debug ("read_bytecode " ^ S.string_of_value adr ^ " " ^ S.string_of_value v ^ "\n")
+      >> return v
+    else read_bytecode adr
+  ;;
 
   (* derived *)
 
-  let modify_reg r f = 
-    read_reg r >>= fun v -> write_reg r (f v)
+  let modify_reg r f = read_reg r >>= fun v -> write_reg r (f v)
+end
 
-end 
-
-module Opcodes(M : Monad) = struct
-
+module Opcodes (M : Monad) = struct
   open M
   open S
 
-  type returns = 
+  type returns =
     [ `step
     | `stop
-    | `c_call of M.S.t * M.S.t ] (* nargs, prim *)
+    | `c_call of (M.S.t * M.S.t[@sexp.opaque])
+    ]
+  [@@deriving sexp_of]
+
+  (* nargs, prim *)
 
   type arg = M.S.t
   type instr = unit M.t
@@ -403,97 +435,75 @@ module Opcodes(M : Monad) = struct
 
   let incr r n = modify_reg r (fun v -> v +: n)
   let decr r n = modify_reg r (fun v -> v -: n)
-
-  let incr_sp = incr `sp (const 8)
-  let decr_sp = decr `sp (const 8)
-
-  let incr_pc = incr `pc (const 4)
-  let decr_pc = decr `pc (const 4)
-
+  let incr_sp = incr Sp (const 8)
+  let decr_sp = decr Sp (const 8)
+  let incr_pc = incr Pc (const 4)
+  let _decr_pc = decr Pc (const 4)
   let c2, c3 = const 2, const 3
-
   let aofs x = sll x c3
   let pcofs x = sll x c2
-  let mofs x = srl x c3
+  let _mofs x = srl x c3
+  let read_bytecode ofs = read_reg Pc >>= fun pc -> read_bytecode (pc +: sll ofs c2)
+  let read_stack ofs = read_reg Sp >>= fun sp -> read_mem Stack (sp +: aofs ofs)
 
-  let read_bytecode ofs = 
-    read_reg `pc >>= fun pc ->
-    read_bytecode (pc +: (sll ofs c2))
+  let write_stack ofs value =
+    read_reg Sp >>= fun sp -> write_mem Stack (sp +: aofs ofs) value
+  ;;
 
-  let read_stack ofs = 
-    read_reg `sp >>= fun sp -> 
-    read_mem `stack (sp +: aofs ofs)
+  let push_stack value = decr_sp >> write_stack zero value
+  let pop_stack = read_stack zero >>= fun arg -> incr_sp >> return arg
 
-  let write_stack ofs value = 
-    read_reg `sp >>= fun sp ->
-    write_mem `stack (sp +: aofs ofs) value
+  let rec pop_stack_n n =
+    if n = 0
+    then return []
+    else pop_stack >>= fun a -> pop_stack_n (n - 1) >>= fun l -> return (a :: l)
+  ;;
 
-  let push_stack value = 
-    decr_sp >> write_stack zero value
-
-  let pop_stack = 
-    read_stack zero >>= fun arg ->
-    incr_sp >>
-    return arg
-
-  let rec pop_stack_n n = 
-    if n=0 then return []
-    else 
-      pop_stack >>= fun a -> 
-      pop_stack_n (n-1) >>= 
-      fun l -> return (a::l)
-
-  let rec push_stack_n e = 
+  let rec push_stack_n e =
     match e with
     | [] -> return ()
-    | h::t -> push_stack h >> push_stack_n t
+    | h :: t -> push_stack h >> push_stack_n t
+  ;;
 
-  let pop_arg = 
-    read_bytecode zero >>= fun arg ->
-    incr_pc >>
-    return arg
+  let pop_arg = read_bytecode zero >>= fun arg -> incr_pc >> return arg
+  let push_stack_accu = read_reg Accu >>= push_stack
 
-  let push_stack_accu = read_reg `accu >>= push_stack 
-
-  let copy_modify_reg from to_ f = 
+  let copy_modify_reg from to_ f =
     read_reg from >>= fun x -> return (f x) >>= write_reg to_
+  ;;
 
-  include Mlvalues.Make(M.S)
+  include Mlvalues.Make (M.S)
 
-  let header ptr = read_mem `mem (ptr -: (aofs one))
-  let field ptr fld = read_mem `mem (ptr +: (aofs fld))
-  let set_field ptr fld v = write_mem `mem (ptr +: (aofs fld)) v
-
+  let header ptr = read_mem Mem (ptr -: aofs one)
+  let field ptr fld = read_mem Mem (ptr +: aofs fld)
+  let set_field ptr fld v = write_mem Mem (ptr +: aofs fld) v
   let modify_field = set_field
 
-  let alloc size tag = 
-    read_reg `alloc_base >>= fun base ->
-    write_reg `alloc_base (base +: aofs (size +: one)) >>
-    write_mem `mem base (make_header size white tag) >>
-    return (base +: aofs one)
+  let alloc size tag =
+    read_reg Alloc_base
+    >>= fun base ->
+    write_reg Alloc_base (base +: aofs (size +: one))
+    >> write_mem Mem base (make_header size white tag)
+    >> return (base +: aofs one)
+  ;;
 
   let check_stacks = return ()
-
-  let not_implemented st = failwith "not implemented"
-
+  let not_implemented _st = failwith "not implemented"
   let raise_error _ = return ()
-
-  let raise_top_exn exn st = raise exn
-
+  let raise_top_exn exn _st = raise exn
   let something_to_do = zero
-
   let step = return `step
 
   (******************************************************************)
   (* XXX DEBUG XXX *)
 
-  let alloc size tag = 
-    if trace then debug ("alloc " ^ string_of_value size ^ "\n") >> alloc size tag
+  let alloc size tag =
+    if trace
+    then debug ("alloc " ^ string_of_value size ^ "\n") >> alloc size tag
     else alloc size tag
+  ;;
 
-  let pop_arg = 
-    if trace then debug ("pop_arg\n") >> pop_arg 
-    else pop_arg
+  let pop_arg = if trace then debug "pop_arg\n" >> pop_arg else pop_arg
 
   (******************************************************************)
   (* Basic stack operations *)
@@ -521,17 +531,10 @@ module Opcodes(M : Monad) = struct
       Next;
   *)
 
-  let accn i = read_stack i >>= write_reg `accu 
-
+  let accn i = read_stack i >>= write_reg Accu
   let acc = pop_arg >>= accn
-
   let push = push_stack_accu
-
-  let pushaccn arg = 
-    push_stack_accu >>
-    read_stack arg >>= fun data ->
-    write_reg `accu data
-
+  let pushaccn arg = push_stack_accu >> read_stack arg >>= fun data -> write_reg Accu data
   let pushacc = pop_arg >>= pushaccn
 
   (*
@@ -539,7 +542,7 @@ module Opcodes(M : Monad) = struct
       sp += *pc++;
       Next;
   *)
-  let pop = pop_arg >>= fun ofs -> modify_reg `sp (fun sp -> sp +: (aofs ofs))
+  let pop = pop_arg >>= fun ofs -> modify_reg Sp (fun sp -> sp +: aofs ofs)
 
   (*
     Instruct(ASSIGN):
@@ -547,10 +550,9 @@ module Opcodes(M : Monad) = struct
       accu = Val_unit;
       Next;
   *)
-  let assign = 
-    pop_arg >>= fun ofs -> 
-    read_reg `accu >>= write_stack ofs >>
-    write_reg `accu val_unit
+  let assign =
+    pop_arg >>= fun ofs -> read_reg Accu >>= write_stack ofs >> write_reg Accu val_unit
+  ;;
 
   (************************************************************)
   (* Access in heap-allocated environment *)
@@ -575,15 +577,11 @@ module Opcodes(M : Monad) = struct
       accu = Field(env, *pc++);
       Next;
   *)
-  let envaccn i = 
-    read_reg `env >>= fun ptr -> field ptr i >>= write_reg `accu
-
+  let envaccn i = read_reg Env >>= fun ptr -> field ptr i >>= write_reg Accu
   let envacc = pop_arg >>= envaccn
-
   let pushenvaccn i = push_stack_accu >> envaccn i
-
   let pushenvacc = pop_arg >>= pushenvaccn
-  
+
   (************************************************************)
   (* Function application *)
 
@@ -597,11 +595,15 @@ module Opcodes(M : Monad) = struct
       Next;
     }
   *)
-  let push_retaddr = 
-    read_reg `extra_args >>= fun eargs -> push_stack (val_int eargs) >>
-    read_reg `env >>= push_stack >>
-    read_reg `pc >>= fun pc -> pop_arg >>= fun ofs -> 
-    push_stack (pc +: (pcofs ofs))
+  let push_retaddr =
+    read_reg Extra_args
+    >>= fun eargs ->
+    push_stack (val_int eargs)
+    >> read_reg Env
+    >>= push_stack
+    >> read_reg Pc
+    >>= fun pc -> pop_arg >>= fun ofs -> push_stack (pc +: pcofs ofs)
+  ;;
 
   (*
     Instruct(APPLY): {
@@ -611,10 +613,13 @@ module Opcodes(M : Monad) = struct
       goto check_stacks;
     }
   *)
-  let apply = 
-    pop_arg >>= fun eargs -> write_reg `extra_args (eargs -: one) >>
-    read_reg `accu >>= fun accu -> read_mem `mem accu >>= write_reg `pc >>
-    write_reg `env accu
+  let apply =
+    pop_arg
+    >>= fun eargs ->
+    write_reg Extra_args (eargs -: one)
+    >> read_reg Accu
+    >>= fun accu -> read_mem Mem accu >>= write_reg Pc >> write_reg Env accu
+  ;;
 
   (*
     .....
@@ -635,17 +640,25 @@ module Opcodes(M : Monad) = struct
       goto check_stacks;
     }
   *)
-  let applyn n = 
-    pop_stack_n n >>= fun args ->
-    read_reg `extra_args >>= fun earg -> push_stack (val_int earg) >>
-    read_reg `env >>= push_stack >>
-    read_reg `pc >>= push_stack >>
-    push_stack_n (List.rev args) >>
-    read_reg `accu >>= fun accu ->
-    read_mem `mem accu >>= write_reg `pc >> 
-    write_reg `env accu >>
-    write_reg `extra_args (const (n-1))
-  
+  let applyn n =
+    pop_stack_n n
+    >>= fun args ->
+    read_reg Extra_args
+    >>= fun earg ->
+    push_stack (val_int earg)
+    >> read_reg Env
+    >>= push_stack
+    >> read_reg Pc
+    >>= push_stack
+    >> push_stack_n (List.rev args)
+    >> read_reg Accu
+    >>= fun accu ->
+    read_mem Mem accu
+    >>= write_reg Pc
+    >> write_reg Env accu
+    >> write_reg Extra_args (const (n - 1))
+  ;;
+
   (*
     Instruct(APPTERM): {
       int nargs = *pc++;
@@ -663,19 +676,25 @@ module Opcodes(M : Monad) = struct
       goto check_stacks;
     }
   *)
-  let appterm = 
-    pop_arg >>= fun nargs ->
-    pop_arg >>= fun slotsize ->
-    read_reg `sp >>= fun sp ->
+  let appterm =
+    pop_arg
+    >>= fun nargs ->
+    pop_arg
+    >>= fun slotsize ->
+    read_reg Sp
+    >>= fun sp ->
     let newsp = slotsize -: nargs in
-    for_dn (nargs -: one) zero
-      (fun i -> read_stack i >>= write_stack (i +: newsp)) >>
-    write_reg `sp (sp +: aofs newsp) >>
-    read_reg `accu >>= fun accu -> read_mem `mem accu >>= write_reg `pc >>
-    write_reg `env accu >>
-    modify_reg `extra_args (fun eargs -> eargs +: (nargs -: one)) >>
-    check_stacks
-  
+    for_dn (nargs -: one) zero (fun i -> read_stack i >>= write_stack (i +: newsp))
+    >> write_reg Sp (sp +: aofs newsp)
+    >> read_reg Accu
+    >>= fun accu ->
+    read_mem Mem accu
+    >>= write_reg Pc
+    >> write_reg Env accu
+    >> modify_reg Extra_args (fun eargs -> eargs +: (nargs -: one))
+    >> check_stacks
+  ;;
+
   (*
     ...
     Instruct(APPTERM3): {
@@ -692,15 +711,21 @@ module Opcodes(M : Monad) = struct
       goto check_stacks;
     }
   *)
-  let apptermn n = 
-    pop_stack_n n >>= fun args ->
-    pop_arg >>= fun ofs ->
-    modify_reg `sp (fun sp -> sp +: aofs (ofs -: const n)) >>
-    push_stack_n (List.rev args) >>
-    read_reg `accu >>= fun accu -> read_mem `mem accu >>= write_reg `pc >>
-    write_reg `env accu >>
-    modify_reg `extra_args (fun earg -> earg +: const (n-1)) >>
-    check_stacks
+  let apptermn n =
+    pop_stack_n n
+    >>= fun args ->
+    pop_arg
+    >>= fun ofs ->
+    modify_reg Sp (fun sp -> sp +: aofs (ofs -: const n))
+    >> push_stack_n (List.rev args)
+    >> read_reg Accu
+    >>= fun accu ->
+    read_mem Mem accu
+    >>= write_reg Pc
+    >> write_reg Env accu
+    >> modify_reg Extra_args (fun earg -> earg +: const (n - 1))
+    >> check_stacks
+  ;;
 
   (*
     Instruct(RETURN): {
@@ -719,17 +744,23 @@ module Opcodes(M : Monad) = struct
     }
   *)
   let return_ =
-    pop_arg >>= fun ofs -> modify_reg `sp (fun sp -> sp +: aofs ofs) >>
-    read_reg `extra_args >>= fun earg ->
-    if_ (earg >+ zero) begin
-      modify_reg `extra_args (fun earg -> earg -: one) >>
-      read_reg `accu >>= fun accu -> read_mem `mem accu >>= write_reg `pc >>
-      write_reg `env accu
-    end begin
-      pop_stack >>= write_reg `pc >>
-      pop_stack >>= write_reg `env >>
-      pop_stack >>= fun eargs -> write_reg `extra_args (int_val earg)
-    end
+    pop_arg
+    >>= fun ofs ->
+    modify_reg Sp (fun sp -> sp +: aofs ofs)
+    >> read_reg Extra_args
+    >>= fun earg ->
+    if_
+      (earg >+ zero)
+      (modify_reg Extra_args (fun earg -> earg -: one)
+      >> read_reg Accu
+      >>= fun accu -> read_mem Mem accu >>= write_reg Pc >> write_reg Env accu)
+      (pop_stack
+      >>= write_reg Pc
+      >> pop_stack
+      >>= write_reg Env
+      >> pop_stack
+      >>= fun _eargs -> write_reg Extra_args (int_val earg))
+  ;;
 
   (*
     Instruct(RESTART): {
@@ -743,14 +774,18 @@ module Opcodes(M : Monad) = struct
     }
   *)
   let restart =
-    read_reg `env >>= header >>= fun hdr ->
-    let num_args = size hdr -: (const 2) in
-    (*modify_reg `sp (fun sp -> sp -: num_args) >>*)
-    read_reg `env >>= fun env ->
-    for_dn (num_args -: one) zero 
-      (fun i -> field env (i +: (const 2)) >>= push_stack) >>
-    field env one >>= write_reg `env  >>
-    modify_reg `extra_args (fun earg -> earg +: num_args)
+    read_reg Env
+    >>= header
+    >>= fun hdr ->
+    let num_args = size hdr -: const 2 in
+    (*modify_reg Sp (fun sp -> sp -: num_args) >>*)
+    read_reg Env
+    >>= fun env ->
+    for_dn (num_args -: one) zero (fun i -> field env (i +: const 2) >>= push_stack)
+    >> field env one
+    >>= write_reg Env
+    >> modify_reg Extra_args (fun earg -> earg +: num_args)
+  ;;
 
   (*
     Instruct(GRAB): {
@@ -773,25 +808,30 @@ module Opcodes(M : Monad) = struct
       Next;
     }
   *)
-  let grab = 
-    pop_arg >>= fun required ->
-    read_reg `extra_args >>= fun earg ->
-    if_ (earg >=+ required) begin
-      write_reg `extra_args (earg -: required)
-    end begin
-      let num_args = earg +: one in
-      alloc (num_args +: (const 2)) closure_tag >>= fun accu ->
-      read_reg `env >>= set_field accu one >>
-      for_up zero num_args
-        (fun i -> pop_stack >>= set_field accu (i +: (const 2))) >>
-      read_reg `pc >>= fun pc -> 
-      write_mem `mem accu (pc -: (pcofs (const 3))) >>
-      pop_stack >>= write_reg `pc >>
-      pop_stack >>= write_reg `env >>
-      pop_stack >>= fun earg -> write_reg `extra_args (int_val earg) >>
-      write_reg `accu accu
-    end
-  
+  let grab =
+    pop_arg
+    >>= fun required ->
+    read_reg Extra_args
+    >>= fun earg ->
+    if_
+      (earg >=+ required)
+      (write_reg Extra_args (earg -: required))
+      (let num_args = earg +: one in
+       alloc (num_args +: const 2) closure_tag
+       >>= fun accu ->
+       read_reg Env
+       >>= set_field accu one
+       >> for_up zero num_args (fun i -> pop_stack >>= set_field accu (i +: const 2))
+       >> read_reg Pc
+       >>= fun pc ->
+       write_mem Mem accu (pc -: pcofs (const 3))
+       >> pop_stack
+       >>= write_reg Pc
+       >> pop_stack
+       >>= write_reg Env
+       >> pop_stack
+       >>= fun earg -> write_reg Extra_args (int_val earg) >> write_reg Accu accu)
+  ;;
 
   (*
     Instruct(CLOSURE): {
@@ -817,16 +857,21 @@ module Opcodes(M : Monad) = struct
       Next;
     }
   *)
-  let closure = 
-    pop_arg >>= fun nvars ->
-    (if_ (nvars >+ zero) (read_reg `accu >>= push_stack) (return ())) >>
-    alloc (nvars +: one) closure_tag >>= fun ptr ->
-    for_up zero nvars 
-      (fun i -> pop_stack >>= set_field ptr (i +: one)) >>
-    pop_arg >>= fun ofs -> 
-    read_reg `pc >>= fun pc ->
-    write_mem `mem ptr (pc +: pcofs (ofs -: one)) >> (* need -1 because we've popped from pc *)
-    write_reg `accu ptr
+  let closure =
+    pop_arg
+    >>= fun nvars ->
+    if_ (nvars >+ zero) (read_reg Accu >>= push_stack) (return ())
+    >> alloc (nvars +: one) closure_tag
+    >>= fun ptr ->
+    for_up zero nvars (fun i -> pop_stack >>= set_field ptr (i +: one))
+    >> pop_arg
+    >>= fun ofs ->
+    read_reg Pc
+    >>= fun pc ->
+    write_mem Mem ptr (pc +: pcofs (ofs -: one))
+    >> (* need -1 because we've popped from pc *)
+    write_reg Accu ptr
+  ;;
 
   (*
     Instruct(CLOSUREREC): {
@@ -866,26 +911,30 @@ module Opcodes(M : Monad) = struct
       Next;
     }
   *)
-  let closurerec = 
-    pop_arg >>= fun nfuncs ->
-    pop_arg >>= fun nvars ->
-    let blksize = (sll nfuncs one) -: one +: nvars in
-    (if_ (nvars >+ zero) (read_reg `accu >>= push_stack) (return ())) >>
-    alloc blksize closure_tag >>= fun ptr ->
-    for_up zero nvars
-      (fun i -> pop_stack >>= set_field ptr ((sll nfuncs one) -: one +: i)) >>
-    read_reg `pc >>= fun pc ->
-    pop_arg >>= fun ofs ->
-    set_field ptr zero (pc +: (pcofs ofs)) >>
-    push_stack ptr >>
-    for_up one nfuncs
-      (fun i -> 
-        let i2 = sll i one in
-        set_field ptr (i2 -: one) (make_header i2 white infix_tag) >>
-        pop_arg >>= fun ofs -> set_field ptr i2 (pc +: (pcofs ofs)) >>
-        push_stack (ptr +: (aofs i2))) >>
-    write_reg `accu ptr
-  
+  let closurerec =
+    pop_arg
+    >>= fun nfuncs ->
+    pop_arg
+    >>= fun nvars ->
+    let blksize = sll nfuncs one -: one +: nvars in
+    if_ (nvars >+ zero) (read_reg Accu >>= push_stack) (return ())
+    >> alloc blksize closure_tag
+    >>= fun ptr ->
+    for_up zero nvars (fun i -> pop_stack >>= set_field ptr (sll nfuncs one -: one +: i))
+    >> read_reg Pc
+    >>= fun pc ->
+    pop_arg
+    >>= fun ofs ->
+    set_field ptr zero (pc +: pcofs ofs)
+    >> push_stack ptr
+    >> for_up one nfuncs (fun i ->
+           let i2 = sll i one in
+           set_field ptr (i2 -: one) (make_header i2 white infix_tag)
+           >> pop_arg
+           >>= fun ofs -> set_field ptr i2 (pc +: pcofs ofs) >> push_stack (ptr +: aofs i2))
+    >> write_reg Accu ptr
+  ;;
+
   (*
     Instruct(PUSHOFFSETCLOSURE):
       *--sp = accu; /* fallthrough */
@@ -905,24 +954,15 @@ module Opcodes(M : Monad) = struct
     Instruct(OFFSETCLOSURE2):
       accu = env + 2 * sizeof(value); Next;
   *)
-  let offsetclosure' ofs = copy_modify_reg `env `accu (fun d -> d +: (aofs ofs))
-
+  let offsetclosure' ofs = copy_modify_reg Env Accu (fun d -> d +: aofs ofs)
   let pushoffsetclosure' ofs = push_stack_accu >> offsetclosure' ofs
-
   let pushoffsetclosure = pop_arg >>= pushoffsetclosure'
-  
   let offsetclosure = pop_arg >>= offsetclosure'
-
   let pushoffsetclosurem2 = pushoffsetclosure' (const (-2))
-
   let offsetclosurem2 = offsetclosure' (const (-2))
-
   let pushoffsetclosure0 = pushoffsetclosure' zero
-
   let offsetclosure0 = offsetclosure' zero
-
   let pushoffsetclosure2 = pushoffsetclosure' (const 2)
-
   let offsetclosure2 = offsetclosure' (const 2)
 
   (************************************************************)
@@ -948,19 +988,20 @@ module Opcodes(M : Monad) = struct
       Next;
     }
   *)
-  let getglobal = 
-    read_reg `global_data >>= fun global_data -> 
-    pop_arg >>= fun fld -> 
-    field global_data fld >>= 
-    write_reg `accu
+  let getglobal =
+    read_reg Global_data
+    >>= fun global_data -> pop_arg >>= fun fld -> field global_data fld >>= write_reg Accu
+  ;;
 
   let pushgetglobal = push_stack_accu >> getglobal
 
-  let getglobalfield = 
-    read_reg `global_data >>= fun global_data -> 
-    pop_arg >>= fun fld -> 
-    field global_data fld >>= fun data ->
-    pop_arg >>= field data >>= write_reg `accu
+  let getglobalfield =
+    read_reg Global_data
+    >>= fun global_data ->
+    pop_arg
+    >>= fun fld ->
+    field global_data fld >>= fun data -> pop_arg >>= field data >>= write_reg Accu
+  ;;
 
   let pushgetglobalfield = push_stack_accu >> getglobalfield
 
@@ -971,12 +1012,13 @@ module Opcodes(M : Monad) = struct
       pc++;
       Next;
   *)
-  let setglobal = 
-    read_reg `global_data >>= fun global_data -> 
-    pop_arg >>= fun fld -> 
-    read_reg `accu >>= 
-    modify_field global_data fld >>
-    write_reg `accu val_unit
+  let setglobal =
+    read_reg Global_data
+    >>= fun global_data ->
+    pop_arg
+    >>= fun fld ->
+    read_reg Accu >>= modify_field global_data fld >> write_reg Accu val_unit
+  ;;
 
   (************************************************************)
   (* Allocation of blocks *)
@@ -994,16 +1036,10 @@ module Opcodes(M : Monad) = struct
     Instruct(ATOM):
       accu = Atom( *pc++); Next;
   *)
-  let atom' ofs = 
-    read_reg `atom_table >>= fun atom -> 
-    write_reg `accu (atom +: aofs ofs)
-
+  let atom' ofs = read_reg Atom_table >>= fun atom -> write_reg Accu (atom +: aofs ofs)
   let atom0 = atom' zero
-
   let pushatom0 = push_stack_accu >> atom0
-
   let atom = pop_arg >>= atom'
-  
   let pushatom = push_stack_accu >> atom
 
   (*
@@ -1037,13 +1073,16 @@ module Opcodes(M : Monad) = struct
       Next;
     }
   *)
-  let makeblockn wosize = 
-    pop_arg >>= fun tag ->
-    alloc wosize tag >>= fun block ->
-    read_reg `accu >>= set_field block zero >>
-    for_up one wosize
-      (fun i -> pop_stack >>= set_field block i) >>
-    write_reg `accu block
+  let makeblockn wosize =
+    pop_arg
+    >>= fun tag ->
+    alloc wosize tag
+    >>= fun block ->
+    read_reg Accu
+    >>= set_field block zero
+    >> for_up one wosize (fun i -> pop_stack >>= set_field block i)
+    >> write_reg Accu block
+  ;;
 
   let makeblock = pop_arg >>= makeblockn
 
@@ -1067,14 +1106,16 @@ module Opcodes(M : Monad) = struct
     }
   *)
 
-  let makefloatblock = 
-    pop_arg >>= fun size ->
-    alloc size double_array_tag >>= fun block ->
-    read_reg `accu >>= set_field block zero >>
-    for_up one size
-      (fun i -> pop_stack >>= set_field block i) >>
-    write_reg `accu block
-
+  let makefloatblock =
+    pop_arg
+    >>= fun size ->
+    alloc size double_array_tag
+    >>= fun block ->
+    read_reg Accu
+    >>= set_field block zero
+    >> for_up one size (fun i -> pop_stack >>= set_field block i)
+    >> write_reg Accu block
+  ;;
 
   (************************************************************)
   (* Access to components of blocks *)
@@ -1088,10 +1129,7 @@ module Opcodes(M : Monad) = struct
     Instruct(GETFIELD):
       accu = Field(accu, *pc); pc++; Next;
   *)
-  let getfieldn n = 
-    read_reg `accu >>= fun accu ->
-    field accu n >>= write_reg `accu
-
+  let getfieldn n = read_reg Accu >>= fun accu -> field accu n >>= write_reg Accu
   let getfield = pop_arg >>= getfieldn
 
   (*
@@ -1103,13 +1141,15 @@ module Opcodes(M : Monad) = struct
       Next;
     }
   *)
-  let getfloatfield = 
-    read_reg `accu >>= fun accu ->
-    pop_arg >>= fun fld ->
-    field accu fld >>= fun d ->
-    alloc one double_tag >>= fun ptr ->
-    set_field ptr zero d >>
-    write_reg `accu ptr
+  let getfloatfield =
+    read_reg Accu
+    >>= fun accu ->
+    pop_arg
+    >>= fun fld ->
+    field accu fld
+    >>= fun d ->
+    alloc one double_tag >>= fun ptr -> set_field ptr zero d >> write_reg Accu ptr
+  ;;
 
   (*
     Instruct(SETFIELD0):
@@ -1128,10 +1168,10 @@ module Opcodes(M : Monad) = struct
       Next;
   *)
   let setfieldn n =
-    read_reg `accu >>= fun accu ->
-    pop_stack >>= fun d ->
-    modify_field accu n d >>
-    write_reg `accu val_unit
+    read_reg Accu
+    >>= fun accu ->
+    pop_stack >>= fun d -> modify_field accu n d >> write_reg Accu val_unit
+  ;;
 
   let setfield = pop_arg >>= setfieldn
 
@@ -1148,21 +1188,23 @@ module Opcodes(M : Monad) = struct
   (************************************************************)
   (* Array operations *)
 
-  let vectlength = 
-    read_reg `accu >>= header >>= fun hdr ->
-    write_reg `accu (val_int (size hdr))
+  let vectlength =
+    read_reg Accu >>= header >>= fun hdr -> write_reg Accu (val_int (size hdr))
+  ;;
 
-  let getvectitem = 
-    read_reg `accu >>= fun accu -> 
-    pop_stack >>= fun fld ->
-    field accu (int_val fld) >>= write_reg `accu
+  let getvectitem =
+    read_reg Accu
+    >>= fun accu -> pop_stack >>= fun fld -> field accu (int_val fld) >>= write_reg Accu
+  ;;
 
-  let setvectitem = 
-    read_reg `accu >>= fun accu ->
-    pop_stack >>= fun fld ->
-    pop_stack >>= fun data ->
-    modify_field accu (int_val fld) data >>
-    write_reg `accu val_unit
+  let setvectitem =
+    read_reg Accu
+    >>= fun accu ->
+    pop_stack
+    >>= fun fld ->
+    pop_stack
+    >>= fun data -> modify_field accu (int_val fld) data >> write_reg Accu val_unit
+  ;;
 
   (************************************************************)
   (* String operations *)
@@ -1173,16 +1215,20 @@ module Opcodes(M : Monad) = struct
       sp += 1;
       Next;
   *)
-  let getstringchar = 
-    pop_stack >>= fun byte_ofs ->
-    read_reg `accu >>= fun ptr ->
+  let getstringchar =
+    pop_stack
+    >>= fun byte_ofs ->
+    read_reg Accu
+    >>= fun ptr ->
     let c7, c255 = const 7, const 255 in
     let byte_ofs = int_val byte_ofs in
-    let ptr = ptr +: (byte_ofs &: (~: c7)) in
+    let ptr = ptr +: (byte_ofs &: ~:c7) in
     let ofs = byte_ofs &: c7 in
-    read_mem `mem ptr >>= fun str ->
-    let byte = (srl str (sll ofs c3)) &: c255 in
-    write_reg `accu (val_int byte)
+    read_mem Mem ptr
+    >>= fun str ->
+    let byte = srl str (sll ofs c3) &: c255 in
+    write_reg Accu (val_int byte)
+  ;;
 
   (*
     Instruct(SETSTRINGCHAR):
@@ -1191,19 +1237,23 @@ module Opcodes(M : Monad) = struct
       accu = Val_unit;
       Next;
   *)
-  let setstringchar = 
-    pop_stack >>= fun byte_ofs ->
-    pop_stack >>= fun byte_val ->
-    read_reg `accu >>= fun ptr ->
+  let setstringchar =
+    pop_stack
+    >>= fun byte_ofs ->
+    pop_stack
+    >>= fun byte_val ->
+    read_reg Accu
+    >>= fun ptr ->
     let c7, c255 = const 7, const 255 in
     let byte_ofs = int_val byte_ofs in
-    let ptr = ptr +: (byte_ofs &: (~: c7)) in
+    let ptr = ptr +: (byte_ofs &: ~:c7) in
     let ofs = byte_ofs &: c7 in
-    read_mem `mem ptr >>= fun str ->
-    let byte = (sll (int_val byte_val) (sll ofs c3)) in
-    let mask = ~: (sll c255 (sll ofs c3)) in
-    write_mem `mem ptr ((str &: mask) |: byte) >>
-    write_reg `accu val_unit
+    read_mem Mem ptr
+    >>= fun str ->
+    let byte = sll (int_val byte_val) (sll ofs c3) in
+    let mask = ~:(sll c255 (sll ofs c3)) in
+    write_mem Mem ptr (str &: mask |: byte) >> write_reg Accu val_unit
+  ;;
 
   (************************************************************)
   (* Branches and conditional branches *)
@@ -1213,25 +1263,21 @@ module Opcodes(M : Monad) = struct
       pc += *pc;
       Next;
   *)
-  let branch = read_bytecode zero >>= fun ofs -> modify_reg `pc (fun pc -> pc +: pcofs ofs)
+  let branch = read_bytecode zero >>= fun ofs -> modify_reg Pc (fun pc -> pc +: pcofs ofs)
 
   (*
     Instruct(BRANCHIF):
       if (accu != Val_false) pc += *pc; else pc++;
       Next;
   *)
-  let branchif = 
-    read_reg `accu >>= fun accu ->
-    if_ (accu <>: val_false) branch incr_pc
+  let branchif = read_reg Accu >>= fun accu -> if_ (accu <>: val_false) branch incr_pc
 
   (*
     Instruct(BRANCHIFNOT):
       if (accu == Val_false) pc += *pc; else pc++;
       Next;
   *)
-  let branchifnot = 
-    read_reg `accu >>= fun accu ->
-    if_ (accu ==: val_false) branch incr_pc
+  let branchifnot = read_reg Accu >>= fun accu -> if_ (accu ==: val_false) branch incr_pc
 
   (*
     Instruct(SWITCH): {
@@ -1248,28 +1294,33 @@ module Opcodes(M : Monad) = struct
       Next;
     }
   *)
-  let switch = 
-    read_reg `accu >>= fun accu ->
-    if_ (is_block accu) begin
-      pop_arg >>= fun sizes ->
-      header accu >>= fun hdr ->
+  let switch =
+    read_reg Accu
+    >>= fun accu ->
+    if_
+      (is_block accu)
+      (pop_arg
+      >>= fun sizes ->
+      header accu
+      >>= fun hdr ->
       let index = tag hdr in
-      read_bytecode ((sizes &: const 0xFFFF) +: index) >>= fun ofs ->
-      modify_reg `pc (fun pc -> pc +: pcofs ofs)
-    end begin
-      let index = int_val accu in
-      incr_pc >>
-      read_bytecode index >>= fun ofs ->
-      modify_reg `pc (fun pc -> pc +: pcofs ofs)
-    end
+      read_bytecode ((sizes &: const 0xFFFF) +: index)
+      >>= fun ofs -> modify_reg Pc (fun pc -> pc +: pcofs ofs))
+      (let index = int_val accu in
+       incr_pc
+       >> read_bytecode index
+       >>= fun ofs -> modify_reg Pc (fun pc -> pc +: pcofs ofs))
+  ;;
 
   (*
     Instruct(BOOLNOT):
       accu = Val_not(accu);
       Next;
   *)
-  let boolnot = (* probably not the hardware implementation we'd choose... *)
-    modify_reg `accu (fun accu -> val_false +: val_true -: accu) 
+  let boolnot =
+    (* probably not the hardware implementation we'd choose... *)
+    modify_reg Accu (fun accu -> val_false +: val_true -: accu)
+  ;;
 
   (************************************************************)
   (* Exceptions *)
@@ -1285,12 +1336,20 @@ module Opcodes(M : Monad) = struct
       pc++;
       Next;
   *)
-  let pushtrap = 
-    read_reg `extra_args >>= fun earg -> push_stack (val_int earg) >>
-    read_reg `env >>= push_stack >>
-    read_reg `trapsp >>= push_stack >>
-    pop_arg >>= fun ofs -> read_reg `pc >>= fun pc -> push_stack (pc +: pcofs (ofs -: one)) >>
-    copy_modify_reg `sp `trapsp (fun d -> d)
+  let pushtrap =
+    read_reg Extra_args
+    >>= fun earg ->
+    push_stack (val_int earg)
+    >> read_reg Env
+    >>= push_stack
+    >> read_reg Trapsp
+    >>= push_stack
+    >> pop_arg
+    >>= fun ofs ->
+    read_reg Pc
+    >>= fun pc ->
+    push_stack (pc +: pcofs (ofs -: one)) >> copy_modify_reg Sp Trapsp (fun d -> d)
+  ;;
 
   (*
     Instruct(POPTRAP):
@@ -1305,10 +1364,12 @@ module Opcodes(M : Monad) = struct
       sp += 4;
       Next;
   *)
-  let poptrap = 
-    if_ something_to_do
+  let poptrap =
+    if_
+      something_to_do
       (return ()) (* XXX *)
-      (read_stack one >>= write_reg `trapsp >> incr `sp (aofs (const 4))) 
+      (read_stack one >>= write_reg Trapsp >> incr Sp (aofs (const 4)))
+  ;;
 
   (*
     Instruct(RAISE):
@@ -1333,22 +1394,29 @@ module Opcodes(M : Monad) = struct
       Next;
   *)
   exception Uncaught_exception
-  let raise_ = 
+
+  let raise_ =
     (*if_ (trapsp >= (stack_high - initial_offset) ???? *)
-    read_reg `stack_high >>= fun stack_high ->
-    read_reg `trapsp >>= fun trapsp ->
-    if_ (trapsp >=: stack_high) 
+    read_reg Stack_high
+    >>= fun stack_high ->
+    read_reg Trapsp
+    >>= fun trapsp ->
+    if_
+      (trapsp >=: stack_high)
       (raise_top_exn Uncaught_exception)
-      begin 
-        read_reg `trapsp >>= write_reg `sp >>
-        pop_stack >>= write_reg `pc >>
-        pop_stack >>= write_reg `trapsp >>
-        pop_stack >>= write_reg `env >>
-        pop_stack >>= fun eargs -> write_reg `extra_args (int_val eargs) 
-      end
+      (read_reg Trapsp
+      >>= write_reg Sp
+      >> pop_stack
+      >>= write_reg Pc
+      >> pop_stack
+      >>= write_reg Trapsp
+      >> pop_stack
+      >>= write_reg Env
+      >> pop_stack
+      >>= fun eargs -> write_reg Extra_args (int_val eargs))
+  ;;
 
   let raise_notrace = raise_
-
   let reraise = raise_
 
   (************************************************************)
@@ -1359,9 +1427,7 @@ module Opcodes(M : Monad) = struct
   (************************************************************)
   (* Signal handling *)
 
-  let check_signals = 
-    if_ something_to_do (* XXX *)
-      (return ()) (return ()) 
+  let check_signals = if_ something_to_do (* XXX *) (return ()) (return ())
 
   (* XXX process signal *)
 
@@ -1386,24 +1452,24 @@ module Opcodes(M : Monad) = struct
       pc++;
       Next;
   *)
-(*
+  (*
   let c_call n = 
     pop_arg >>= fun prim ->
-    read_reg `env >>= push_stack >>
+    read_reg Env >>= push_stack >>
     c_call prim >>= fun result -> 
     if_ (c_call_exn result) begin
-      write_reg `accu (c_call_val result) 
+      write_reg Accu (c_call_val result) 
     end begin
-      write_reg `accu (c_call_val result) >>
-      pop_stack >>= write_reg `env >>
-      modify_reg `sp (fun sp -> sp +: (aofs n))
+      write_reg Accu (c_call_val result) >>
+      pop_stack >>= write_reg Env >>
+      modify_reg Sp (fun sp -> sp +: (aofs n))
     end
 
   let c_calln = not_implemented
 *)
-  
-  let c_call n = pop_arg >>= fun prim -> return (`c_call(n, prim))
-  let c_calln = pop_arg >>= fun prim -> return (`c_call(const 0,prim))
+
+  let c_call n = pop_arg >>= fun prim -> return (`c_call (n, prim))
+  let c_calln = pop_arg >>= fun prim -> return (`c_call (const 0, prim))
 
   (************************************************************)
   (* Integer constants *)
@@ -1421,8 +1487,7 @@ module Opcodes(M : Monad) = struct
     Instruct(PUSHCONST3):
       *--sp = accu; accu = Val_int(3); Next;
   *)
-  let constn n = write_reg `accu (val_int n)
-  
+  let constn n = write_reg Accu (val_int n)
   let pushconstn n = push_stack_accu >> constn n
 
   (*
@@ -1435,7 +1500,6 @@ module Opcodes(M : Monad) = struct
       Next;
   *)
   let constint = pop_arg >>= constn
-
   let pushconstint = push_stack_accu >> constint
 
   (************************************************************)
@@ -1451,14 +1515,10 @@ module Opcodes(M : Monad) = struct
     Instruct(MULINT):
       accu = Val_long(Long_val(accu) * Long_val( *sp++)); Next;
   *)
-  let negint = modify_reg `accu (fun d -> (const 2) -: d)
-
-  let op2int f = pop_stack >>= fun b -> modify_reg `accu (fun a -> f a b)
-
+  let negint = modify_reg Accu (fun d -> const 2 -: d)
+  let op2int f = pop_stack >>= fun b -> modify_reg Accu (fun a -> f a b)
   let addint = op2int (fun a b -> a +: b -: one)
-
   let subint = op2int (fun a b -> a -: b +: one)
-
   let mulint = op2int (fun a b -> val_int (int_val a *: int_val b))
 
   (*
@@ -1475,17 +1535,19 @@ module Opcodes(M : Monad) = struct
       Next;
     }
   *)
-  let op2div f = 
-    pop_stack >>= fun divisor ->
+  let op2div f =
+    pop_stack
+    >>= fun divisor ->
     let divisor = int_val divisor in
-    if_ (divisor ==: zero) 
+    if_
+      (divisor ==: zero)
       (raise_error "divide by zero")
-      (modify_reg `accu (fun a -> val_int (f (int_val a) divisor)))
-      
-  let divint = op2div (fun a b -> a /: b)
+      (modify_reg Accu (fun a -> val_int (f (int_val a) divisor)))
+  ;;
 
+  let divint = op2div (fun a b -> a /: b)
   let modint = op2div (fun a b -> a %: b)
-  
+
   (*
     Instruct(ANDINT):
       accu = (value)((intnat) accu & (intnat) *sp++); Next;
@@ -1501,41 +1563,27 @@ module Opcodes(M : Monad) = struct
     Instruct(ASRINT):
       accu = (value)((((intnat) accu - 1) >> Long_val( *sp++)) | 1); Next;
   *)
-  let andint = op2int (&:)
-
-  let orint = op2int (|:)
-
-  let xorint = op2int (fun a b -> (a ^: b) |: one)
-
-  let lslint = op2int (fun a b -> (sll (a -: one) (int_val b)) +: one)
-
-  let lsrint = op2int (fun a b -> (srl (a -: one) (int_val b)) |: one)
-
-  let asrint = op2int (fun a b -> (sra (a -: one) (int_val b)) |: one)
+  let andint = op2int ( &: )
+  let orint = op2int ( |: )
+  let xorint = op2int (fun a b -> a ^: b |: one)
+  let lslint = op2int (fun a b -> sll (a -: one) (int_val b) +: one)
+  let lsrint = op2int (fun a b -> srl (a -: one) (int_val b) |: one)
+  let asrint = op2int (fun a b -> sra (a -: one) (int_val b) |: one)
 
   (*
     #define Integer_comparison(typ,opname,tst) 
         Instruct(opname): 
           accu = Val_int((typ) accu tst (typ) *sp++); Next;
   *)
-  let int_comp f =
-    pop_stack >>= fun b -> modify_reg `accu (fun a -> val_int (f a b))
-
-  let eq = int_comp (==:)
-
-  let neq = int_comp (<>:)
-
-  let ltint = int_comp (<+)
-  
-  let leint = int_comp (<=+)
-
-  let gtint = int_comp (>+)
-
-  let geint = int_comp (>=+)
-
-  let ultint = int_comp (<:)
-
-  let ugeint = int_comp (>=:)
+  let int_comp f = pop_stack >>= fun b -> modify_reg Accu (fun a -> val_int (f a b))
+  let eq = int_comp ( ==: )
+  let neq = int_comp ( <>: )
+  let ltint = int_comp ( <+ )
+  let leint = int_comp ( <=+ )
+  let gtint = int_comp ( >+ )
+  let geint = int_comp ( >=+ )
+  let ultint = int_comp ( <: )
+  let ugeint = int_comp ( >=: )
 
   (*
     #define Integer_branch_comparison(typ,opname,tst,debug) 
@@ -1546,27 +1594,25 @@ module Opcodes(M : Monad) = struct
             pc++ ; 
           } ; Next;
   *)
-  let int_bcomp f = 
-    pop_arg >>= fun a -> read_reg `accu >>= fun b ->
-    if_ (f a (int_val b))
-      (read_bytecode zero >>= fun ofs -> modify_reg `pc (fun pc -> pc +: (pcofs ofs)))
+  let int_bcomp f =
+    pop_arg
+    >>= fun a ->
+    read_reg Accu
+    >>= fun b ->
+    if_
+      (f a (int_val b))
+      (read_bytecode zero >>= fun ofs -> modify_reg Pc (fun pc -> pc +: pcofs ofs))
       incr_pc
+  ;;
 
-  let beq = int_bcomp (==:)
-
-  let bneq = int_bcomp (<>:)
-
-  let bltint = int_bcomp (<+)
-  
-  let bleint = int_bcomp (<=+)
-
-  let bgtint = int_bcomp (>+)
-
-  let bgeint = int_bcomp (>=+)
-
-  let bultint = int_bcomp (<:)
-
-  let bugeint = int_bcomp (>=:)
+  let beq = int_bcomp ( ==: )
+  let bneq = int_bcomp ( <>: )
+  let bltint = int_bcomp ( <+ )
+  let bleint = int_bcomp ( <=+ )
+  let bgtint = int_bcomp ( >+ )
+  let bgeint = int_bcomp ( >=+ )
+  let bultint = int_bcomp ( <: )
+  let bugeint = int_bcomp ( >=: )
 
   (*
     Instruct(OFFSETINT):
@@ -1574,9 +1620,7 @@ module Opcodes(M : Monad) = struct
       pc++;
       Next
   *)
-  let offsetint = 
-    pop_arg >>= fun pc -> 
-    modify_reg `accu (fun accu -> accu +: (sll pc one)) 
+  let offsetint = pop_arg >>= fun pc -> modify_reg Accu (fun accu -> accu +: sll pc one)
 
   (*
     Instruct(OFFSETREF):
@@ -1585,19 +1629,21 @@ module Opcodes(M : Monad) = struct
       pc++;
       Next
   *)
-  let offsetref = 
-    pop_arg >>= fun pc ->
-    read_reg `accu >>= fun accu ->
-    field accu zero >>= fun d ->
-    set_field accu zero (d +: (sll pc one)) >>
-    write_reg `accu val_unit
-  
+  let offsetref =
+    pop_arg
+    >>= fun pc ->
+    read_reg Accu
+    >>= fun accu ->
+    field accu zero
+    >>= fun d -> set_field accu zero (d +: sll pc one) >> write_reg Accu val_unit
+  ;;
+
   (*
     Instruct(ISINT):
       accu = Val_long(accu & 1);
       Next;
   *)
-  let isint = modify_reg `accu (fun accu -> val_int (accu &: one))
+  let isint = modify_reg Accu (fun accu -> val_int (accu &: one))
 
   (************************************************************)
   (* Object-oriented operations *)
@@ -1609,12 +1655,13 @@ module Opcodes(M : Monad) = struct
       accu = Lookup(sp[0], accu);
       Next;
   *)
-  let getmethod = 
-    read_reg `accu >>= fun lab ->
-    read_stack zero >>= fun obj ->
-    field obj zero >>= fun obj ->
-    field obj (int_val lab) >>= fun d ->
-    write_reg `accu d
+  let getmethod =
+    read_reg Accu
+    >>= fun lab ->
+    read_stack zero
+    >>= fun obj ->
+    field obj zero >>= fun obj -> field obj (int_val lab) >>= fun d -> write_reg Accu d
+  ;;
 
   (*
     Instruct(GETDYNMET): {
@@ -1630,11 +1677,15 @@ module Opcodes(M : Monad) = struct
       Next;
     }
   *)
-  let getdynmet = 
-    read_stack zero >>= fun d -> field d zero >>= fun meths ->
-    field meths zero >>= fun hi ->
-    M.dynmet meths hi >>= fun li ->
-    field meths (li -: one) >>= write_reg `accu
+  let getdynmet =
+    read_stack zero
+    >>= fun d ->
+    field d zero
+    >>= fun meths ->
+    field meths zero
+    >>= fun hi ->
+    M.dynmet meths hi >>= fun li -> field meths (li -: one) >>= write_reg Accu
+  ;;
 
   (*
     Instruct(GETPUBMET):
@@ -1643,206 +1694,172 @@ module Opcodes(M : Monad) = struct
       pc += 2;
       /* Fallthrough (to GETDYNMET) */
   *)
-  let getpubmet = 
-    read_reg `accu >>= push_stack >>
-    read_bytecode zero >>= fun arg ->
-    write_reg `accu (val_int arg) >>
-    incr `pc (pcofs (const 2)) >>
-    getdynmet
+  let getpubmet =
+    read_reg Accu
+    >>= push_stack
+    >> read_bytecode zero
+    >>= fun arg -> write_reg Accu (val_int arg) >> incr Pc (pcofs (const 2)) >> getdynmet
+  ;;
 
   (************************************************************)
   (* Debugging and machine control *)
 
   let stop = return ()
-
   let event = not_implemented
-
   let break = not_implemented
 
   (************************************************************)
 
-  let dispatch = function
-    | Instr.ACC0 -> accn (const 0) >> step
-    | Instr.ACC1 -> accn (const 1) >> step
-    | Instr.ACC2 -> accn (const 2) >> step
-    | Instr.ACC3 -> accn (const 3) >> step
-    | Instr.ACC4 -> accn (const 4) >> step
-    | Instr.ACC5 -> accn (const 5) >> step
-    | Instr.ACC6 -> accn (const 6) >> step
-    | Instr.ACC7 -> accn (const 7) >> step
-    | Instr.ACC -> acc >> step
-  
-    | Instr.PUSH -> push >> step
-    | Instr.PUSHACC0 -> pushaccn (const 0) >> step
-    | Instr.PUSHACC1 -> pushaccn (const 1) >> step
-    | Instr.PUSHACC2 -> pushaccn (const 2) >> step
-    | Instr.PUSHACC3 -> pushaccn (const 3) >> step
-    | Instr.PUSHACC4 -> pushaccn (const 4) >> step
-    | Instr.PUSHACC5 -> pushaccn (const 5) >> step
-    | Instr.PUSHACC6 -> pushaccn (const 6) >> step
-    | Instr.PUSHACC7 -> pushaccn (const 7) >> step
-    | Instr.PUSHACC -> pushacc >> step
-  
-    | Instr.POP -> pop >> step
-    | Instr.ASSIGN -> assign >> step
-
-    | Instr.ENVACC1 -> envaccn (const 1) >> step
-    | Instr.ENVACC2 -> envaccn (const 2) >> step
-    | Instr.ENVACC3 -> envaccn (const 3) >> step
-    | Instr.ENVACC4 -> envaccn (const 4) >> step
-    | Instr.ENVACC -> envacc >> step
-    
-    | Instr.PUSHENVACC1 -> pushenvaccn (const 1) >> step
-    | Instr.PUSHENVACC2 -> pushenvaccn (const 2) >> step
-    | Instr.PUSHENVACC3 -> pushenvaccn (const 3) >> step
-    | Instr.PUSHENVACC4 -> pushenvaccn (const 4) >> step
-    | Instr.PUSHENVACC -> pushenvacc >> step
-    
-    | Instr.PUSH_RETADDR -> push_retaddr >> step
-    
-    | Instr.APPLY -> apply >> step
-    | Instr.APPLY1 -> applyn 1 >> step
-    | Instr.APPLY2 -> applyn 2  >> step
-    | Instr.APPLY3 -> applyn 3  >> step
-    
-    | Instr.APPTERM -> appterm >> step
-    | Instr.APPTERM1 -> apptermn 1 >> step
-    | Instr.APPTERM2 -> apptermn 2 >> step
-    | Instr.APPTERM3 -> apptermn 3 >> step
-    
-    | Instr.RETURN -> return_ >> step
-    | Instr.RESTART -> restart >> step
-    | Instr.GRAB -> grab >> step
-    | Instr.CLOSURE -> closure >> step
-    | Instr.CLOSUREREC -> closurerec >> step
-    
-    | Instr.OFFSETCLOSUREM2 -> offsetclosurem2 >> step
-    | Instr.OFFSETCLOSURE0 -> offsetclosure0 >> step
-    | Instr.OFFSETCLOSURE2 -> offsetclosure2 >> step
-    | Instr.OFFSETCLOSURE -> offsetclosure >> step
-
-    | Instr.PUSHOFFSETCLOSUREM2 -> pushoffsetclosurem2  >> step
-    | Instr.PUSHOFFSETCLOSURE0 -> pushoffsetclosure0 >> step
-    | Instr.PUSHOFFSETCLOSURE2 -> pushoffsetclosure2 >> step
-    | Instr.PUSHOFFSETCLOSURE -> pushoffsetclosure  >> step
-    
-    | Instr.GETGLOBAL -> getglobal >> step
-    | Instr.PUSHGETGLOBAL -> pushgetglobal >> step
-    | Instr.GETGLOBALFIELD -> getglobalfield >> step
-    | Instr.PUSHGETGLOBALFIELD -> pushgetglobalfield >> step
-    | Instr.SETGLOBAL -> setglobal >> step
-    
-    | Instr.ATOM0 -> atom0 >> step
-    | Instr.ATOM -> atom >> step
-    
-    | Instr.PUSHATOM0 -> pushatom0 >> step
-    | Instr.PUSHATOM -> pushatom >> step
-    
-    | Instr.MAKEBLOCK -> makeblock >> step
-    | Instr.MAKEBLOCK1 -> makeblockn (const 1) >> step
-    | Instr.MAKEBLOCK2 -> makeblockn (const 2) >> step
-    | Instr.MAKEBLOCK3 -> makeblockn (const 3) >> step
-    | Instr.MAKEFLOATBLOCK -> makefloatblock >> step
-    
-    | Instr.GETFIELD0 -> getfieldn (const 0) >> step
-    | Instr.GETFIELD1 -> getfieldn (const 1) >> step
-    | Instr.GETFIELD2 -> getfieldn (const 2) >> step
-    | Instr.GETFIELD3 -> getfieldn (const 3) >> step
-    | Instr.GETFIELD -> getfield >> step
-    | Instr.GETFLOATFIELD -> getfloatfield >> step
-
-    | Instr.SETFIELD0 -> setfieldn (const 0) >> step
-    | Instr.SETFIELD1 -> setfieldn (const 1) >> step
-    | Instr.SETFIELD2 -> setfieldn (const 2) >> step
-    | Instr.SETFIELD3 -> setfieldn (const 3) >> step
-    | Instr.SETFIELD -> setfield >> step
-    | Instr.SETFLOATFIELD -> setfloatfield  >> step
-    
-    | Instr.VECTLENGTH -> vectlength >> step
-    | Instr.GETVECTITEM -> getvectitem >> step
-    | Instr.SETVECTITEM -> setvectitem >> step
-    
-    | Instr.GETSTRINGCHAR -> getstringchar >> step
-    | Instr.SETSTRINGCHAR -> setstringchar >> step
-    
-    | Instr.BRANCH -> branch >> step
-    | Instr.BRANCHIF -> branchif >> step
-    | Instr.BRANCHIFNOT -> branchifnot >> step
-    | Instr.SWITCH -> switch >> step
-    
-    | Instr.BOOLNOT -> boolnot >> step
-    
-    | Instr.PUSHTRAP -> pushtrap >> step
-    | Instr.POPTRAP -> poptrap >> step
-    | Instr.RAISE -> raise_ >> step
-    
-    | Instr.CHECK_SIGNALS -> check_signals >> step
-
+  let dispatch (x : Opcode.t) =
+    match x with
+    | ACC0 -> accn (const 0) >> step
+    | ACC1 -> accn (const 1) >> step
+    | ACC2 -> accn (const 2) >> step
+    | ACC3 -> accn (const 3) >> step
+    | ACC4 -> accn (const 4) >> step
+    | ACC5 -> accn (const 5) >> step
+    | ACC6 -> accn (const 6) >> step
+    | ACC7 -> accn (const 7) >> step
+    | ACC -> acc >> step
+    | PUSH -> push >> step
+    | PUSHACC0 -> pushaccn (const 0) >> step
+    | PUSHACC1 -> pushaccn (const 1) >> step
+    | PUSHACC2 -> pushaccn (const 2) >> step
+    | PUSHACC3 -> pushaccn (const 3) >> step
+    | PUSHACC4 -> pushaccn (const 4) >> step
+    | PUSHACC5 -> pushaccn (const 5) >> step
+    | PUSHACC6 -> pushaccn (const 6) >> step
+    | PUSHACC7 -> pushaccn (const 7) >> step
+    | PUSHACC -> pushacc >> step
+    | POP -> pop >> step
+    | ASSIGN -> assign >> step
+    | ENVACC1 -> envaccn (const 1) >> step
+    | ENVACC2 -> envaccn (const 2) >> step
+    | ENVACC3 -> envaccn (const 3) >> step
+    | ENVACC4 -> envaccn (const 4) >> step
+    | ENVACC -> envacc >> step
+    | PUSHENVACC1 -> pushenvaccn (const 1) >> step
+    | PUSHENVACC2 -> pushenvaccn (const 2) >> step
+    | PUSHENVACC3 -> pushenvaccn (const 3) >> step
+    | PUSHENVACC4 -> pushenvaccn (const 4) >> step
+    | PUSHENVACC -> pushenvacc >> step
+    | PUSH_RETADDR -> push_retaddr >> step
+    | APPLY -> apply >> step
+    | APPLY1 -> applyn 1 >> step
+    | APPLY2 -> applyn 2 >> step
+    | APPLY3 -> applyn 3 >> step
+    | APPTERM -> appterm >> step
+    | APPTERM1 -> apptermn 1 >> step
+    | APPTERM2 -> apptermn 2 >> step
+    | APPTERM3 -> apptermn 3 >> step
+    | RETURN -> return_ >> step
+    | RESTART -> restart >> step
+    | GRAB -> grab >> step
+    | CLOSURE -> closure >> step
+    | CLOSUREREC -> closurerec >> step
+    | OFFSETCLOSUREM2 -> offsetclosurem2 >> step
+    | OFFSETCLOSURE0 -> offsetclosure0 >> step
+    | OFFSETCLOSURE2 -> offsetclosure2 >> step
+    | OFFSETCLOSURE -> offsetclosure >> step
+    | PUSHOFFSETCLOSUREM2 -> pushoffsetclosurem2 >> step
+    | PUSHOFFSETCLOSURE0 -> pushoffsetclosure0 >> step
+    | PUSHOFFSETCLOSURE2 -> pushoffsetclosure2 >> step
+    | PUSHOFFSETCLOSURE -> pushoffsetclosure >> step
+    | GETGLOBAL -> getglobal >> step
+    | PUSHGETGLOBAL -> pushgetglobal >> step
+    | GETGLOBALFIELD -> getglobalfield >> step
+    | PUSHGETGLOBALFIELD -> pushgetglobalfield >> step
+    | SETGLOBAL -> setglobal >> step
+    | ATOM0 -> atom0 >> step
+    | ATOM -> atom >> step
+    | PUSHATOM0 -> pushatom0 >> step
+    | PUSHATOM -> pushatom >> step
+    | MAKEBLOCK -> makeblock >> step
+    | MAKEBLOCK1 -> makeblockn (const 1) >> step
+    | MAKEBLOCK2 -> makeblockn (const 2) >> step
+    | MAKEBLOCK3 -> makeblockn (const 3) >> step
+    | MAKEFLOATBLOCK -> makefloatblock >> step
+    | GETFIELD0 -> getfieldn (const 0) >> step
+    | GETFIELD1 -> getfieldn (const 1) >> step
+    | GETFIELD2 -> getfieldn (const 2) >> step
+    | GETFIELD3 -> getfieldn (const 3) >> step
+    | GETFIELD -> getfield >> step
+    | GETFLOATFIELD -> getfloatfield >> step
+    | SETFIELD0 -> setfieldn (const 0) >> step
+    | SETFIELD1 -> setfieldn (const 1) >> step
+    | SETFIELD2 -> setfieldn (const 2) >> step
+    | SETFIELD3 -> setfieldn (const 3) >> step
+    | SETFIELD -> setfield >> step
+    | SETFLOATFIELD -> setfloatfield >> step
+    | VECTLENGTH -> vectlength >> step
+    | GETVECTITEM -> getvectitem >> step
+    | SETVECTITEM -> setvectitem >> step
+    | GETSTRINGCHAR -> getstringchar >> step
+    | SETSTRINGCHAR -> setstringchar >> step
+    | BRANCH -> branch >> step
+    | BRANCHIF -> branchif >> step
+    | BRANCHIFNOT -> branchifnot >> step
+    | SWITCH -> switch >> step
+    | BOOLNOT -> boolnot >> step
+    | PUSHTRAP -> pushtrap >> step
+    | POPTRAP -> poptrap >> step
+    | RAISE -> raise_ >> step
+    | CHECK_SIGNALS -> check_signals >> step
     (* argument is number of elements to pop from stack *)
-    | Instr.C_CALL1 -> c_call (const 1) 
-    | Instr.C_CALL2 -> c_call (const 2) 
-    | Instr.C_CALL3 -> c_call (const 3) 
-    | Instr.C_CALL4 -> c_call (const 4) 
-    | Instr.C_CALL5 -> c_call (const 5) 
-    | Instr.C_CALLN -> c_call (const 0)
-    
-    | Instr.CONST0 -> constn (const 0) >> step
-    | Instr.CONST1 -> constn (const 1) >> step
-    | Instr.CONST2 -> constn (const 2) >> step
-    | Instr.CONST3 -> constn (const 3) >> step
-    | Instr.CONSTINT -> constint >> step
-    
-    | Instr.PUSHCONST0 -> pushconstn (const 0) >> step
-    | Instr.PUSHCONST1 -> pushconstn (const 1) >> step
-    | Instr.PUSHCONST2 -> pushconstn (const 2) >> step
-    | Instr.PUSHCONST3 -> pushconstn (const 3) >> step
-    | Instr.PUSHCONSTINT -> pushconstint >> step
-    
-    | Instr.NEGINT -> negint >> step
-    | Instr.ADDINT -> addint >> step
-    | Instr.SUBINT -> subint >> step
-    | Instr.MULINT -> mulint >> step
-    | Instr.DIVINT -> divint >> step
-    | Instr.MODINT -> modint >> step
-    | Instr.ANDINT -> andint >> step
-    | Instr.ORINT -> orint >> step
-    | Instr.XORINT -> xorint >> step
-    | Instr.LSLINT -> lslint >> step
-    | Instr.LSRINT -> lsrint >> step
-    | Instr.ASRINT -> asrint >> step
-    
-    | Instr.EQ -> eq >> step
-    | Instr.NEQ -> neq >> step
-    | Instr.LTINT -> ltint >> step
-    | Instr.LEINT -> leint >> step
-    | Instr.GTINT -> gtint >> step
-    | Instr.GEINT -> geint >> step
-    
-    | Instr.OFFSETINT -> offsetint >> step
-    | Instr.OFFSETREF -> offsetref >> step
-    | Instr.ISINT -> isint >> step
-    | Instr.GETMETHOD -> getmethod >> step
-    
-    | Instr.BEQ -> beq >> step
-    | Instr.BNEQ -> bneq >> step
-    | Instr.BLTINT -> bltint >> step
-    | Instr.BLEINT -> bleint >> step
-    | Instr.BGTINT -> bgtint >> step
-    | Instr.BGEINT -> bgeint >> step
-    
-    | Instr.ULTINT -> ultint >> step
-    | Instr.UGEINT -> ugeint >> step
-    | Instr.BULTINT -> bultint >> step
-    | Instr.BUGEINT -> bugeint >> step
-    
-    | Instr.GETPUBMET -> getpubmet >> step
-    | Instr.GETDYNMET -> getdynmet >> step
-    
-    | Instr.STOP -> stop >> return `stop
-    | Instr.EVENT -> event >> step
-    | Instr.BREAK -> break >> step
-    | Instr.RERAISE -> reraise >> step
-    | Instr.RAISE_NOTRACE-> raise_notrace >> step
-  
+    | C_CALL1 -> c_call (const 1)
+    | C_CALL2 -> c_call (const 2)
+    | C_CALL3 -> c_call (const 3)
+    | C_CALL4 -> c_call (const 4)
+    | C_CALL5 -> c_call (const 5)
+    | C_CALLN -> c_call (const 0)
+    | CONST0 -> constn (const 0) >> step
+    | CONST1 -> constn (const 1) >> step
+    | CONST2 -> constn (const 2) >> step
+    | CONST3 -> constn (const 3) >> step
+    | CONSTINT -> constint >> step
+    | PUSHCONST0 -> pushconstn (const 0) >> step
+    | PUSHCONST1 -> pushconstn (const 1) >> step
+    | PUSHCONST2 -> pushconstn (const 2) >> step
+    | PUSHCONST3 -> pushconstn (const 3) >> step
+    | PUSHCONSTINT -> pushconstint >> step
+    | NEGINT -> negint >> step
+    | ADDINT -> addint >> step
+    | SUBINT -> subint >> step
+    | MULINT -> mulint >> step
+    | DIVINT -> divint >> step
+    | MODINT -> modint >> step
+    | ANDINT -> andint >> step
+    | ORINT -> orint >> step
+    | XORINT -> xorint >> step
+    | LSLINT -> lslint >> step
+    | LSRINT -> lsrint >> step
+    | ASRINT -> asrint >> step
+    | EQ -> eq >> step
+    | NEQ -> neq >> step
+    | LTINT -> ltint >> step
+    | LEINT -> leint >> step
+    | GTINT -> gtint >> step
+    | GEINT -> geint >> step
+    | OFFSETINT -> offsetint >> step
+    | OFFSETREF -> offsetref >> step
+    | ISINT -> isint >> step
+    | GETMETHOD -> getmethod >> step
+    | BEQ -> beq >> step
+    | BNEQ -> bneq >> step
+    | BLTINT -> bltint >> step
+    | BLEINT -> bleint >> step
+    | BGTINT -> bgtint >> step
+    | BGEINT -> bgeint >> step
+    | ULTINT -> ultint >> step
+    | UGEINT -> ugeint >> step
+    | BULTINT -> bultint >> step
+    | BUGEINT -> bugeint >> step
+    | GETPUBMET -> getpubmet >> step
+    | GETDYNMET -> getdynmet >> step
+    | STOP -> stop >> return `stop
+    | EVENT -> event >> step
+    | BREAK -> break >> step
+    | RERAISE -> reraise >> step
+    | RAISE_NOTRACE -> raise_notrace >> step
+  ;;
 end
-

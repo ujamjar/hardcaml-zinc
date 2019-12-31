@@ -1,24 +1,31 @@
-type memory = (int64, Bigarray.int64_elt, Bigarray.c_layout) Bigarray.Array1.t 
+open Base
+module Obj = Caml.Obj
 
 (** intermediate representation of ocaml memory values *)
-type repr64 = 
-  [ `f of int64 * int64 array 
-  | `b of int64 * repr64 array 
-  | `i of int64 ]
+type t =
+  | Flat of
+      { header : Int64.t
+      ; data : Int64.t array
+      }
+  | Block of
+      { header : Int64.t
+      ; data : t array
+      }
+  | Int of Int64.t
+[@@deriving sexp_of]
 
 (** bit pattern of an obj, including the low order hidden bit *)
 val int64_of_obj : Obj.t -> int64
 
-(** convert Obj.t to repr64.  If closure is false, then blocks with
-    closure tags are converted to unit *)
-val repr64_of_obj : ?closure:bool -> Obj.t -> repr64
+(** convert [Obj.t] to [t]. If closure is false, then blocks with closure tags
+   are converted to unit *)
+val of_obj : ?closure:bool -> Obj.t -> t
 
-(** conver repr64 to Obj.t *)
-val obj_of_repr64 : repr64 -> Obj.t
+(** convert [t] to [Obj.t] *)
+val to_obj : t -> Obj.t
 
-(** int64 array of repr64.  Internally pointers are offset. *)
-val data64_of_repr64 : repr64 -> int -> int64 array
+(** int64 array of [t].  Internally pointers are offset. *)
+val to_data64 : t -> int -> int64 array
 
-(* repr64 of int64 array *)
-val repr64_of_data64 : ?closure:bool -> memory -> int64 -> repr64
-
+(** [t] of int64 array **)
+val of_data64 : ?closure:bool -> Memory.t -> int64 -> t
