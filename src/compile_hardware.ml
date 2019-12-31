@@ -6,12 +6,6 @@ open Interp
 (* Because we are building a 64 bit interpreter. We should look at a 32 bit one
    as well. *)
 let dbits = 64
-let _initr x = Array.init Machine.num_machine_registers ~f:(fun _ -> x)
-let getr a i = a.(Machine.Register.Variants.to_rank i)
-let setr a i v = a.(Machine.Register.Variants.to_rank i) <- v
-let _initc x = Array.init Machine.num_cache_spaces ~f:(fun _ -> x)
-let _getc a i = a.(Machine.Cache.Variants.to_rank i)
-let _setc a i v = a.(Machine.Cache.Variants.to_rank i) <- v
 
 module Expression = struct
   let is_const = function
@@ -84,10 +78,10 @@ module Expression = struct
 
   module S = Hardcaml.Signal
 
-  let rec compile env = function
+  let rec compile lookup = function
     | Interp.Op (op, a', b') ->
       let a, b =
-        try compile env a', compile env b' with
+        try compile lookup a', compile lookup b' with
         | _ -> failwith "failed to look up subexpression"
       in
       (match op with
@@ -97,10 +91,7 @@ module Expression = struct
       | ">>+" -> S.sra a (const_value b')
       | "<<" -> S.sll a (const_value b')
       | _ -> failwith ("unknown expression operator '" ^ op ^ "'"))
-    | Val id ->
-      (match Map.find env id with
-      | Some x -> x
-      | None -> failwith ("cant find variable " ^ Int.to_string id))
+    | Val id -> lookup id
     | Const x -> S.consti ~width:dbits x
   ;;
 end
@@ -136,169 +127,207 @@ module Statement = struct
   let simplify st = { st with cmd = simplify_stats st.cmd }
 end
 
-(* 
-      Lets try to understand the problems here.
+(* Before we try to optimise anything, lets due a purely sequential statemachine.
 
-      We are temporary values (ie _0, _1 etc) with calls to
-      Get_reg and Get_mem *only*.
+   I need to work out how to manage the statemachine representation.
+ *)
+module Sequential = struct
+  open Hardcaml
+  open Signal
 
-      For Get_mem these become register assignments and a state update.
-      Relative to Set_mem, therefore, memory accesses and the generated
-      values are serialised.
+  module Zinc_register = struct
+    (* A bit of internal plumbing so the registers can be exposed as an interface *)
+    type 'a t = 'a array [@@deriving sexp_of]
 
-      For Get_reg this reflects the current value of a register.
-      We use these values in combinatorial expressions passed
-      to Set_reg, Set_mem and also used in the looping and if constructs.
+    module Pre : Hardcaml.Interface.Pre with type 'a t = 'a t = struct
+      type nonrec 'a t = 'a t [@@deriving sexp_of]
 
-      A Set_reg does not generate a new state, rather we update the 
-      combinatorial expression.  When a Set_mem comes a long we do need
-      to update the register.  At this point the combinatorial expressions
-      become invalid.  Is that OK?  I guess they are committed at that 
-      point so maybe it is.
+      let map = Array.map
+      let map2 a b ~f = Array.init (Array.length a) ~f:(fun i -> f a.(i) b.(i))
+      let iter = Array.iter
+      let iter2 a b ~f = ignore (map2 a b ~f : unit array)
+      let to_list = Array.to_list
 
-      None-the-less the previous temporary value *IS* still in scope
-      and is no longer valid.  Somehow we will need to latch the value
-      and start using it instead in potential future expressions.
-      Note that it is very likely the old value wont be used so
-      we would hope this register could disappear somehow.
+      let t =
+        Machine.Register.all
+        |> List.map ~f:(fun x -> Sexp.to_string_hum (Machine.Register.sexp_of_t x), dbits)
+        |> Array.of_list
+      ;;
+    end
 
-      An example sequence.
+    include Interface.Make (Pre)
 
-      _0 = sp;
-      sp = _0 + 4; // s = sp + 4, but not yet committed
-      _1 = sp;     // read new sp value
-      pc = _0;     // pc = initial value of sp as read at start
-      accu = _1;   // accu = new value of sp ie sp+4
-
-      No states are generated here.
-
-      This is affected by an intermediate state being generated
-
-      _0 = sp;
-      sp = _0 + 4;
-      _1 = program[0]; // this will insert a state
-      _2 = sp;
-      pc = _0;         // pc = sp (new value) ** BAD VALUE **
-      accu = _2;       // OK
-
-  *)
-
-(* Lets try to simplify things into passes.
-
-      1) Split into states.  We should be able to generate
-         the statemachine structure before we start.
-
-      2) We could optionally derive the liveness of variables
-         within states, but this is an optimisation.
-
-      3) Generate logic for each state.  Understanding where
-         variables are generated and used (ie if the states are
-         different) will help in creating the logic structures)
-
-  *)
-
-open Hardcaml
-open Signal
-
-type env =
-  { id_to_wire : t Map.M(Int).t
-  ; regs : t array
-  }
-
-let _init_env () =
-  { id_to_wire = Map.empty (module Int)
-  ; regs =
-      List.map Machine.Register.all ~f:(fun r ->
-          let name = Machine.Register.sexp_of_t r |> Sexp.to_string_hum in
-          zero dbits -- name)
+    let create reg_spec =
+      List.map Machine.Register.all ~f:(fun _ ->
+          Always.Variable.reg reg_spec ~enable:vdd ~width:64)
       |> Array.of_list
-  }
-;;
+    ;;
 
-type state =
-  { n : int
-  ; next :
-      [ `next of int (* statemachine jumps (generally end of sequence?) *)
-      | `mem of sp_cmd * int (* memory operation *)
-      | `branch of sp_cmd * int * int (* branch *)
-      ]
-  ; instrs : sp_cmd list
-  }
+    let var t register = t.(Machine.Register.Variants.to_rank register)
+    let get t register = (var t register).Always.Variable.value
+  end
 
-let print_states sts =
-  List.iter sts ~f:(fun st ->
-      let open Printf in
-      Stdio.printf "****** %i\n" st.n;
-      Interp.State_poly.(print { id = 0; cmd = st.instrs });
-      Stdio.printf
-        "next = %s\n"
-        (match st.next with
-        | `next i -> sprintf "%i" i
-        | `mem (_, i) -> sprintf "%i [mem]" i
-        | `branch (_, a, b) -> sprintf "%i/%i [branch]" a b);
-      Stdio.printf "\n")
-;;
+  module Command_register = struct
+    type t =
+      { reg_spec : Reg_spec.t
+      ; table : (int, Always.Variable.t) Hashtbl.t
+      }
 
-let compile st =
-  let cmd = State_poly.normalise st.cmd in
-  let rec _compile_stats env = function
-    | [] -> env
-    (* (psuedo-) update registers and expressions *)
-    | Get_reg (id, reg) :: t ->
-      let env =
-        { env with
-          id_to_wire = Map.add_exn env.id_to_wire ~key:id ~data:(getr env.regs reg)
+    let create reg_spec = { reg_spec; table = Hashtbl.create (module Int) }
+
+    let var t index =
+      match Hashtbl.find t.table index with
+      | None ->
+        let x = Always.Variable.reg t.reg_spec ~enable:vdd ~width:64 in
+        ignore (x.value -- ("cmd_reg" ^ Int.to_string index) : Signal.t);
+        Hashtbl.set t.table ~key:index ~data:x;
+        x
+      | Some x -> x
+    ;;
+
+    let lookup t index =
+      match Hashtbl.find t.table index with
+      | None -> raise_s [%message "Failed to lookup variable" (index : int)]
+      | Some x -> x.value
+    ;;
+  end
+
+  module Memory_control = struct
+    let var_wire (n, b) =
+      let v = Always.Variable.wire ~default:(zero b) in
+      ignore (v.value -- n : Signal.t);
+      v
+    ;;
+
+    module I = struct
+      type 'a t =
+        { read_available : 'a
+        ; read_data : 'a [@bits dbits]
+        ; write_complete : 'a
         }
-      in
-      _compile_stats env t
-    | Set_reg (reg, vl) :: t ->
-      setr env.regs reg (Expression.compile env.id_to_wire vl);
-      _compile_stats env t
-    (* memory io and state completion *)
-    | Get_mem (id, _, _) :: t ->
-      let env =
-        { env with id_to_wire = Map.add_exn env.id_to_wire ~key:id ~data:(wire dbits) }
-      in
-      _compile_stats env t
-    | Set_mem (_, _, _) :: t -> _compile_stats env t
-    | _ -> failwith "not yet"
-  in
-  let newst ?(next = `next 0) ?(instrs = []) ?(n = 0) () = { n; next; instrs } in
-  let _rs' rstate = function
-    | [] -> 0
-    | _ -> rstate
-  in
-  let rec compile_states (cs, rs, sts) instrs = function
-    | [] -> cs + 1, rs, newst ~instrs ~n:cs () :: sts
-    (* Get/Set_reg; push instructions *)
-    | (Get_reg _ as x) :: t -> compile_states (cs, rs, sts) (x :: instrs) t
-    | (Set_reg _ as x) :: t -> compile_states (cs, rs, sts) (x :: instrs) t
-    (* Get/Set_mem generate new states *)
-    | (Set_mem _ as x) :: t ->
-      let st =
-        newst ~instrs ~next:(`mem (x, if List.is_empty t then rs else cs + 1)) ~n:cs ()
-      in
-      compile_states (cs + 1, rs, st :: sts) [] t
-    | (Get_mem _ as x) :: t ->
-      let st =
-        newst ~instrs ~next:(`mem (x, if List.is_empty t then rs else cs + 1)) ~n:cs ()
-      in
-      compile_states (cs + 1, rs, st :: sts) [] t
-    (* control flow creates new states *)
-    | (Cond (_, a, b) as x) :: t ->
-      (* create branch states *)
-      let ns, bs0 = cs + 1, cs + 2 in
-      let bs1, _, sts = compile_states (bs0, ns, sts) [] a in
-      let _, _, sts = compile_states (bs1, ns, sts) [] b in
-      (* create cur state *)
-      let st = newst ~instrs ~n:cs ~next:(`branch (x, bs0, bs1)) () in
-      (* continue with next states *)
-      compile_states (ns, rs, st :: sts) [] t
-    | Iter _ :: _ -> failwith "not sure about iter yet!"
-  in
-  (* _compile_stats (init_env ()) cmd*)
-  let _, _, sts = compile_states (0, 0, []) [] cmd in
-  let sts = List.sort ~compare:(fun a b -> Int.compare a.n b.n) sts in
-  let () = print_states sts in
-  ()
-;;
+      [@@deriving sexp_of, hardcaml]
+    end
+
+    module O = struct
+      type 'a t =
+        { read : 'a
+        ; read_address : 'a [@bits dbits]
+        ; write : 'a
+        ; write_data : 'a [@bits dbits]
+        ; write_address : 'a [@bits dbits]
+        }
+      [@@deriving sexp_of, hardcaml]
+
+      let var_wires () = map t ~f:var_wire
+    end
+  end
+
+  module I = struct
+    type 'a t =
+      { clock : 'a
+      ; clear : 'a
+      ; memory_in : 'a Memory_control.I.t [@rtlprefix "mi_"]
+      ; program_in : 'a Memory_control.I.t [@rtlprefix "pi_"]
+      ; stack_in : 'a Memory_control.I.t [@rtlprefix "si_"]
+      }
+    [@@deriving sexp_of, hardcaml]
+  end
+
+  module O = struct
+    type 'a t =
+      { memory_out : 'a Memory_control.O.t [@rtlprefix "mo_"]
+      ; program_out : 'a Memory_control.O.t [@rtlprefix "po_"]
+      ; stack_out : 'a Memory_control.O.t [@rtlprefix "so_"]
+      ; zinc_registers : 'a Zinc_register.t
+      }
+    [@@deriving sexp_of, hardcaml]
+  end
+
+  let compile st (i : _ I.t) =
+    let reg_spec = Reg_spec.create () ~clock:i.clock ~clear:i.clear in
+    let cmd = State_poly.normalise (Statement.simplify st).cmd in
+    let stack_out = Memory_control.O.var_wires () in
+    let program_out = Memory_control.O.var_wires () in
+    let memory_out = Memory_control.O.var_wires () in
+    let select_memory = function
+      | Machine.Cache.Stack -> i.stack_in, stack_out
+      | Program -> i.program_in, program_out
+      | Mem -> i.memory_in, memory_out
+    in
+    let command_registers = Command_register.create reg_spec in
+    let zinc_registers = Zinc_register.create reg_spec in
+    (* XXX I figure we will probaby need to pre-process the computation to work
+       out the number of states we need. Either way, it's not this once we
+       support Cond and Iter. *)
+    let num_states = List.length cmd in
+    let module States = struct
+      type t = int [@@deriving sexp_of, compare]
+
+      let all = List.range 0 (num_states + 1)
+    end
+    in
+    let sm = Always.State_machine.create (module States) reg_spec ~enable:vdd in
+    ignore (sm.current -- "state" : Signal.t);
+    let compile state_number cmd =
+      let notyet () = raise_s [%message "not yet"] in
+      match cmd with
+      | Get_reg (id, zinc_register) ->
+        ( state_number
+        , Always.
+            [ Command_register.var command_registers id
+              <-- Zinc_register.get zinc_registers zinc_register
+            ; sm.set_next (state_number + 1)
+            ] )
+      | Set_reg (zinc_register, expr) ->
+        ( state_number
+        , Always.
+            [ Zinc_register.var zinc_registers zinc_register
+              <-- Expression.compile (Command_register.lookup command_registers) expr
+            ; sm.set_next (state_number + 1)
+            ] )
+      | Get_mem (id, which_memory, address) ->
+        let memory_in, memory_out = select_memory which_memory in
+        ( state_number
+        , Always.
+            [ memory_out.read <-- vdd
+            ; memory_out.read_address
+              <-- Expression.compile (Command_register.lookup command_registers) address
+            ; when_
+                memory_in.read_available
+                [ Command_register.var command_registers id <-- memory_in.read_data
+                ; sm.set_next (state_number + 1)
+                ]
+            ] )
+      | Set_mem (which_memory, address, data) ->
+        let memory_in, memory_out = select_memory which_memory in
+        ( state_number
+        , Always.
+            [ memory_out.write <-- vdd
+            ; memory_out.write_address
+              <-- Expression.compile (Command_register.lookup command_registers) address
+            ; memory_out.write_data
+              <-- Expression.compile (Command_register.lookup command_registers) data
+            ; when_ memory_in.write_complete [ sm.set_next (state_number + 1) ]
+            ] )
+      | Cond _ -> notyet ()
+      | Iter _ -> notyet ()
+    in
+    let states = List.mapi cmd ~f:compile in
+    Always.(
+      compile
+        [ proc Zinc_register.(map zinc_registers ~f:(fun r -> r <-- r.value) |> to_list)
+        ; proc
+            Memory_control.O.(
+              map memory_out ~f:(fun r -> r <-- zero (width r.value)) |> to_list)
+        ; proc
+            Memory_control.O.(
+              map stack_out ~f:(fun r -> r <-- zero (width r.value)) |> to_list)
+        ; proc
+            Memory_control.O.(
+              map program_out ~f:(fun r -> r <-- zero (width r.value)) |> to_list)
+        ; sm.switch (states @ [ num_states, [] ])
+        ]);
+    { O.memory_out; program_out; stack_out; zinc_registers }
+    |> O.map ~f:(fun o -> o.value)
+  ;;
+end
