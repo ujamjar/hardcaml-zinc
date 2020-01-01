@@ -87,6 +87,9 @@ module Expression = struct
       (match op with
       | "+" -> S.( +: ) a b
       | "-" -> S.( -: ) a b
+      | "|" -> S.( |: ) a b
+      | "&" -> S.( &: ) a b
+      | "^" -> S.( ^: ) a b
       | ">>" -> S.srl a (const_value b')
       | ">>+" -> S.sra a (const_value b')
       | "<<" -> S.sll a (const_value b')
