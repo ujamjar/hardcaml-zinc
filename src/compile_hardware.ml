@@ -125,6 +125,54 @@ module Statement = struct
   and simplify_stats x = List.map x ~f:simplify_stat
 
   let simplify st = { st with cmd = simplify_stats st.cmd }
+
+  module Usage = struct
+    type t =
+      { read_registers : Machine.Register.t list
+      ; write_registers : Machine.Register.t list
+      ; read_memories : Machine.Cache.t list
+      ; write_memories : Machine.Cache.t list
+      }
+
+    let z =
+      { read_registers = []
+      ; write_registers = []
+      ; read_memories = []
+      ; write_memories = []
+      }
+    ;;
+
+    let merge a b =
+      { read_registers = a.read_registers @ b.read_registers
+      ; write_registers = a.write_registers @ b.write_registers
+      ; read_memories = a.read_memories @ b.read_memories
+      ; write_memories = a.write_memories @ b.write_memories
+      }
+    ;;
+
+    let rec usage1 st =
+      match st with
+      | Get_reg (_, reg) -> { z with read_registers = [ reg ] }
+      | Set_reg (reg, _) -> { z with write_registers = [ reg ] }
+      | Get_mem (_, mem, _) -> { z with read_memories = [ mem ] }
+      | Set_mem (mem, _, _) -> { z with write_memories = [ mem ] }
+      | Cond (_, t, f) -> merge (usage t) (usage f)
+      | Iter (_, _, _, _, body) -> usage body
+
+    and usage st_list = List.fold st_list ~init:z ~f:(fun acc st -> merge acc (usage1 st))
+
+    let create st =
+      let a = usage st in
+      { read_registers =
+          Set.of_list (module Machine.Register) a.read_registers |> Set.to_list
+      ; write_registers =
+          Set.of_list (module Machine.Register) a.write_registers |> Set.to_list
+      ; read_memories = Set.of_list (module Machine.Cache) a.read_memories |> Set.to_list
+      ; write_memories =
+          Set.of_list (module Machine.Cache) a.write_memories |> Set.to_list
+      }
+    ;;
+  end
 end
 
 (* Before we try to optimise anything, lets due a purely sequential statemachine.
