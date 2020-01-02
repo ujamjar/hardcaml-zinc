@@ -1,27 +1,37 @@
 open Base
 
 module Register = struct
-  (* zinc registers *)
-  type t =
-    | Accu
-    | Env
-    | Pc
-    | Sp
-    | Extra_args
-    | Trapsp
-    | Global_data
-    | Atom_table
-    | Alloc_base
-    | Stack_high
-  [@@deriving equal, compare, sexp_of, enumerate, variants]
+  module T = struct
+    (* zinc registers *)
+    type t =
+      | Accu
+      | Env
+      | Pc
+      | Sp
+      | Extra_args
+      | Trapsp
+      | Global_data
+      | Atom_table
+      | Alloc_base
+      | Stack_high
+    [@@deriving equal, compare, sexp_of, enumerate, variants]
+  end
+
+  include T
+  include Comparator.Make (T)
 end
 
 module Cache = struct
-  type t =
-    | Stack
-    | Program
-    | Mem
-  [@@deriving equal, compare, sexp_of, enumerate, variants]
+  module T = struct
+    type t =
+      | Stack
+      | Program
+      | Mem
+    [@@deriving equal, compare, sexp_of, enumerate, variants]
+  end
+
+  include T
+  include Comparator.Make (T)
 end
 
 type memory_mapping =

@@ -15,7 +15,7 @@ module Expression = struct
 
   let const_value = function
     | Const n -> n
-    | _ -> failwith "expr is not a constant"
+    | _ -> raise_s [%message "expr is not a constant"]
   ;;
 
   let const_equals e n =
@@ -82,15 +82,19 @@ module Expression = struct
     | Interp.Op (op, a', b') ->
       let a, b =
         try compile lookup a', compile lookup b' with
-        | _ -> failwith "failed to look up subexpression"
+        | e -> raise_s [%message "failed to look up subexpression" (e : exn)]
       in
       (match op with
       | "+" -> S.( +: ) a b
       | "-" -> S.( -: ) a b
+      | "|" -> S.( |: ) a b
+      | "&" -> S.( &: ) a b
+      | "^" -> S.( ^: ) a b
+      | ">+" -> S.( >+ ) a b
       | ">>" -> S.srl a (const_value b')
       | ">>+" -> S.sra a (const_value b')
       | "<<" -> S.sll a (const_value b')
-      | _ -> failwith ("unknown expression operator '" ^ op ^ "'"))
+      | _ -> raise_s [%message "unknown expression operator" (op : string)])
     | Val id -> lookup id
     | Const x -> S.consti ~width:dbits x
   ;;
@@ -125,6 +129,54 @@ module Statement = struct
   and simplify_stats x = List.map x ~f:simplify_stat
 
   let simplify st = { st with cmd = simplify_stats st.cmd }
+
+  module Usage = struct
+    type t =
+      { read_registers : Machine.Register.t list
+      ; write_registers : Machine.Register.t list
+      ; read_memories : Machine.Cache.t list
+      ; write_memories : Machine.Cache.t list
+      }
+
+    let z =
+      { read_registers = []
+      ; write_registers = []
+      ; read_memories = []
+      ; write_memories = []
+      }
+    ;;
+
+    let merge a b =
+      { read_registers = a.read_registers @ b.read_registers
+      ; write_registers = a.write_registers @ b.write_registers
+      ; read_memories = a.read_memories @ b.read_memories
+      ; write_memories = a.write_memories @ b.write_memories
+      }
+    ;;
+
+    let rec usage1 st =
+      match st with
+      | Get_reg (_, reg) -> { z with read_registers = [ reg ] }
+      | Set_reg (reg, _) -> { z with write_registers = [ reg ] }
+      | Get_mem (_, mem, _) -> { z with read_memories = [ mem ] }
+      | Set_mem (mem, _, _) -> { z with write_memories = [ mem ] }
+      | Cond (_, t, f) -> merge (usage t) (usage f)
+      | Iter (_, _, _, _, body) -> usage body
+
+    and usage st_list = List.fold st_list ~init:z ~f:(fun acc st -> merge acc (usage1 st))
+
+    let create st =
+      let a = usage st in
+      { read_registers =
+          Set.of_list (module Machine.Register) a.read_registers |> Set.to_list
+      ; write_registers =
+          Set.of_list (module Machine.Register) a.write_registers |> Set.to_list
+      ; read_memories = Set.of_list (module Machine.Cache) a.read_memories |> Set.to_list
+      ; write_memories =
+          Set.of_list (module Machine.Cache) a.write_memories |> Set.to_list
+      }
+    ;;
+  end
 end
 
 (* Before we try to optimise anything, lets due a purely sequential statemachine.
@@ -243,6 +295,18 @@ module Sequential = struct
     [@@deriving sexp_of, hardcaml]
   end
 
+  let rec count_cmd_states : Interp.sp_cmd -> int = function
+    | Get_reg _ -> 1
+    | Set_reg _ -> 1
+    | Get_mem _ -> 1
+    | Set_mem _ -> 1
+    | Cond (_, t, f) -> count_states t + count_states f + 1
+    | Iter (_, _, _, _, body) -> count_states body + 2
+
+  and count_states cmds =
+    List.fold cmds ~init:1 ~f:(fun acc cmd -> acc + count_cmd_states cmd)
+  ;;
+
   let compile st (i : _ I.t) =
     let reg_spec = Reg_spec.create () ~clock:i.clock ~clear:i.clear in
     let cmd = State_poly.normalise (Statement.simplify st).cmd in
@@ -259,75 +323,150 @@ module Sequential = struct
     (* XXX I figure we will probaby need to pre-process the computation to work
        out the number of states we need. Either way, it's not this once we
        support Cond and Iter. *)
-    let num_states = List.length cmd in
+    let num_states = count_states cmd in
     let module States = struct
       type t = int [@@deriving sexp_of, compare]
 
-      let all = List.range 0 (num_states + 1)
+      let all = List.range 0 num_states
     end
     in
     let sm = Always.State_machine.create (module States) reg_spec ~enable:vdd in
     ignore (sm.current -- "state" : Signal.t);
-    let compile state_number cmd =
-      let notyet () = raise_s [%message "not yet"] in
+    let rec compile state_number cmd =
       match cmd with
       | Get_reg (id, zinc_register) ->
-        ( state_number
-        , Always.
-            [ Command_register.var command_registers id
-              <-- Zinc_register.get zinc_registers zinc_register
-            ; sm.set_next (state_number + 1)
-            ] )
+        ( [ ( state_number
+            , Always.
+                [ Command_register.var command_registers id
+                  <-- Zinc_register.get zinc_registers zinc_register
+                ; sm.set_next (state_number + 1)
+                ] )
+          ]
+        , state_number + 1 )
       | Set_reg (zinc_register, expr) ->
-        ( state_number
-        , Always.
-            [ Zinc_register.var zinc_registers zinc_register
-              <-- Expression.compile (Command_register.lookup command_registers) expr
-            ; sm.set_next (state_number + 1)
-            ] )
+        ( [ ( state_number
+            , Always.
+                [ Zinc_register.var zinc_registers zinc_register
+                  <-- Expression.compile (Command_register.lookup command_registers) expr
+                ; sm.set_next (state_number + 1)
+                ] )
+          ]
+        , state_number + 1 )
       | Get_mem (id, which_memory, address) ->
         let memory_in, memory_out = select_memory which_memory in
-        ( state_number
-        , Always.
-            [ memory_out.read <-- vdd
-            ; memory_out.read_address
-              <-- Expression.compile (Command_register.lookup command_registers) address
-            ; when_
-                memory_in.read_available
-                [ Command_register.var command_registers id <-- memory_in.read_data
-                ; sm.set_next (state_number + 1)
-                ]
-            ] )
+        ( [ ( state_number
+            , Always.
+                [ memory_out.read <-- vdd
+                ; memory_out.read_address
+                  <-- Expression.compile
+                        (Command_register.lookup command_registers)
+                        address
+                ; when_
+                    memory_in.read_available
+                    [ Command_register.var command_registers id <-- memory_in.read_data
+                    ; sm.set_next (state_number + 1)
+                    ]
+                ] )
+          ]
+        , state_number + 1 )
       | Set_mem (which_memory, address, data) ->
         let memory_in, memory_out = select_memory which_memory in
-        ( state_number
-        , Always.
-            [ memory_out.write <-- vdd
-            ; memory_out.write_address
-              <-- Expression.compile (Command_register.lookup command_registers) address
-            ; memory_out.write_data
-              <-- Expression.compile (Command_register.lookup command_registers) data
-            ; when_ memory_in.write_complete [ sm.set_next (state_number + 1) ]
-            ] )
-      | Cond _ -> notyet ()
-      | Iter _ -> notyet ()
+        ( [ ( state_number
+            , Always.
+                [ memory_out.write <-- vdd
+                ; memory_out.write_address
+                  <-- Expression.compile
+                        (Command_register.lookup command_registers)
+                        address
+                ; memory_out.write_data
+                  <-- Expression.compile (Command_register.lookup command_registers) data
+                ; when_ memory_in.write_complete [ sm.set_next (state_number + 1) ]
+                ] )
+          ]
+        , state_number + 1 )
+      | Cond (c, t, f) ->
+        let c = Expression.compile (Command_register.lookup command_registers) c in
+        let t, t_state_number = compile_states (state_number + 1) [] t in
+        let f, f_state_number = compile_states (t_state_number + 1) [] f in
+        ( List.concat
+            Always.
+              [ [ ( state_number
+                  , [ if_
+                        c
+                        [ sm.set_next (state_number + 1) ]
+                        [ sm.set_next (t_state_number + 1) ]
+                    ] )
+                ]
+              ; t
+              ; [ t_state_number, [ sm.set_next (f_state_number + 1) ] ]
+              ; f
+              ; [ f_state_number, [ sm.set_next (f_state_number + 1) ] ]
+              ]
+        , f_state_number + 1 )
+      | Iter (up_down, index_id, index_from, index_to, body) ->
+        let index_from =
+          Expression.compile (Command_register.lookup command_registers) index_from
+        in
+        let index_to =
+          Expression.compile (Command_register.lookup command_registers) index_to
+        in
+        let looping =
+          if up_down then index_from <: index_to else index_from >=: index_to
+        in
+        let index = Command_register.var command_registers index_id in
+        let body, last_body_state_number = compile_states (state_number + 1) [] body in
+        ( List.concat
+            Always.
+              [ [ ( state_number
+                  , [ index <-- index_from
+                    ; if_
+                        looping
+                        [ sm.set_next (state_number + 1) ]
+                        [ sm.set_next (last_body_state_number + 2) ]
+                    ] )
+                ]
+              ; body
+              ; [ ( last_body_state_number
+                  , [ index <-- index.value +:. 1
+                    ; sm.set_next (last_body_state_number + 1)
+                    ] )
+                ; ( last_body_state_number + 1
+                  , [ if_
+                        looping
+                        [ sm.set_next (state_number + 1) ]
+                        [ sm.set_next (last_body_state_number + 2) ]
+                    ] )
+                ]
+              ]
+        , last_body_state_number + 2 )
+    and compile_states current_state_number states cmd =
+      match cmd with
+      | [] -> states, current_state_number
+      | h :: t ->
+        let always, next_state_number = compile current_state_number h in
+        compile_states next_state_number (states @ always) t
     in
-    let states = List.mapi cmd ~f:compile in
-    Always.(
-      compile
-        [ proc Zinc_register.(map zinc_registers ~f:(fun r -> r <-- r.value) |> to_list)
-        ; proc
-            Memory_control.O.(
-              map memory_out ~f:(fun r -> r <-- zero (width r.value)) |> to_list)
-        ; proc
-            Memory_control.O.(
-              map stack_out ~f:(fun r -> r <-- zero (width r.value)) |> to_list)
-        ; proc
-            Memory_control.O.(
-              map program_out ~f:(fun r -> r <-- zero (width r.value)) |> to_list)
-        ; sm.switch (states @ [ num_states, [] ])
-        ]);
-    { O.memory_out; program_out; stack_out; zinc_registers }
-    |> O.map ~f:(fun o -> o.value)
+    let states, _ = compile_states 0 [] cmd in
+    try
+      Always.(
+        compile
+          [ proc Zinc_register.(map zinc_registers ~f:(fun r -> r <-- r.value) |> to_list)
+          ; proc
+              Memory_control.O.(
+                map memory_out ~f:(fun r -> r <-- zero (width r.value)) |> to_list)
+          ; proc
+              Memory_control.O.(
+                map stack_out ~f:(fun r -> r <-- zero (width r.value)) |> to_list)
+          ; proc
+              Memory_control.O.(
+                map program_out ~f:(fun r -> r <-- zero (width r.value)) |> to_list)
+          ; sm.switch (states @ [ num_states - 1, [] ])
+          ]);
+      { O.memory_out; program_out; stack_out; zinc_registers }
+      |> O.map ~f:(fun o -> o.value)
+    with
+    | e ->
+      raise_s
+        [%message (num_states : int) (e : exn) (states : (int * Always.t list) list)]
   ;;
 end

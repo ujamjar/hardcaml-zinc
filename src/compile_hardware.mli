@@ -8,6 +8,17 @@ end
 
 module Statement : sig
   val simplify : Interp.sp_st -> Interp.sp_st
+
+  module Usage : sig
+    type t =
+      { read_registers : Machine.Register.t list
+      ; write_registers : Machine.Register.t list
+      ; read_memories : Machine.Cache.t list
+      ; write_memories : Machine.Cache.t list
+      }
+
+    val create : Interp.sp_cmd list -> t
+  end
 end
 
 module Sequential : sig

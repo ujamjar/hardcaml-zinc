@@ -14,6 +14,8 @@ module Register : sig
     | Alloc_base
     | Stack_high
   [@@deriving equal, compare, sexp_of, enumerate, variants]
+
+  include Comparator.S with type t := t
 end
 
 module Cache : sig
@@ -22,6 +24,8 @@ module Cache : sig
     | Program
     | Mem
   [@@deriving equal, compare, sexp_of, enumerate, variants]
+
+  include Comparator.S with type t := t
 end
 
 type memory_mapping =
