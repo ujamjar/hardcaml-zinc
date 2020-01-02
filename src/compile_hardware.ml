@@ -15,7 +15,7 @@ module Expression = struct
 
   let const_value = function
     | Const n -> n
-    | _ -> failwith "expr is not a constant"
+    | _ -> raise_s [%message "expr is not a constant"]
   ;;
 
   let const_equals e n =
@@ -82,7 +82,7 @@ module Expression = struct
     | Interp.Op (op, a', b') ->
       let a, b =
         try compile lookup a', compile lookup b' with
-        | _ -> failwith "failed to look up subexpression"
+        | e -> raise_s [%message "failed to look up subexpression" (e : exn)]
       in
       (match op with
       | "+" -> S.( +: ) a b
@@ -94,7 +94,7 @@ module Expression = struct
       | ">>" -> S.srl a (const_value b')
       | ">>+" -> S.sra a (const_value b')
       | "<<" -> S.sll a (const_value b')
-      | _ -> failwith ("unknown expression operator '" ^ op ^ "'"))
+      | _ -> raise_s [%message "unknown expression operator" (op : string)])
     | Val id -> lookup id
     | Const x -> S.consti ~width:dbits x
   ;;
@@ -301,7 +301,7 @@ module Sequential = struct
     | Get_mem _ -> 1
     | Set_mem _ -> 1
     | Cond (_, t, f) -> count_states t + count_states f + 1
-    | Iter _ -> 0
+    | Iter (_, _, _, _, body) -> count_states body + 2
 
   and count_states cmds =
     List.fold cmds ~init:1 ~f:(fun acc cmd -> acc + count_cmd_states cmd)
@@ -333,7 +333,6 @@ module Sequential = struct
     let sm = Always.State_machine.create (module States) reg_spec ~enable:vdd in
     ignore (sm.current -- "state" : Signal.t);
     let rec compile state_number cmd =
-      let notyet () = raise_s [%message "not yet"] in
       match cmd with
       | Get_reg (id, zinc_register) ->
         ( [ ( state_number
@@ -404,7 +403,42 @@ module Sequential = struct
               ; [ f_state_number, [ sm.set_next (f_state_number + 1) ] ]
               ]
         , f_state_number + 1 )
-      | Iter _ -> notyet ()
+      | Iter (up_down, index_id, index_from, index_to, body) ->
+        let index_from =
+          Expression.compile (Command_register.lookup command_registers) index_from
+        in
+        let index_to =
+          Expression.compile (Command_register.lookup command_registers) index_to
+        in
+        let looping =
+          if up_down then index_from <: index_to else index_from >=: index_to
+        in
+        let index = Command_register.var command_registers index_id in
+        let body, last_body_state_number = compile_states (state_number + 1) [] body in
+        ( List.concat
+            Always.
+              [ [ ( state_number
+                  , [ index <-- index_from
+                    ; if_
+                        looping
+                        [ sm.set_next (state_number + 1) ]
+                        [ sm.set_next (last_body_state_number + 2) ]
+                    ] )
+                ]
+              ; body
+              ; [ ( last_body_state_number
+                  , [ index <-- index.value +:. 1
+                    ; sm.set_next (last_body_state_number + 1)
+                    ] )
+                ; ( last_body_state_number + 1
+                  , [ if_
+                        looping
+                        [ sm.set_next (state_number + 1) ]
+                        [ sm.set_next (last_body_state_number + 2) ]
+                    ] )
+                ]
+              ]
+        , last_body_state_number + 2 )
     and compile_states current_state_number states cmd =
       match cmd with
       | [] -> states, current_state_number
