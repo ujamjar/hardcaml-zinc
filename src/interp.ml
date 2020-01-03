@@ -315,11 +315,12 @@ struct
   let read_mem cache adr st = S.get_mem st cache (S.srl adr c3)
   let write_mem cache adr value st = (), S.set_mem st cache (S.srl adr c3) value
 
-  (* move logic into state *)
+  (* XXX move logic into state *)
   let read_bytecode adr st =
     let open S in
     let ins, st = S.get_mem st Program (srl adr c3) in
     let sel = adr &: const 4 in
+    (* This wont work in hardware.*)
     let ins = sra (if S.equal sel zero then sll ins c32 else ins) c32 in
     ins, st
   ;;
