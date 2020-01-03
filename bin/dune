@@ -1,4 +1,5 @@
-(executable
- (name monadinterp)
- (libraries compiler-libs.bytecomp hardcaml_zinc)
+(executables
+ (names monadinterp interpreter rtl)
+ (libraries core compiler-libs.bytecomp hardcaml_zinc)
+ (preprocess (pps ppx_jane))
  )

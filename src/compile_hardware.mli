@@ -76,8 +76,31 @@ module Sequential : sig
       ; program_out : 'a Memory_control.O.t
       ; stack_out : 'a Memory_control.O.t
       ; zinc_registers : 'a Zinc_register.t
+      ; done_ : 'a
       }
     [@@deriving sexp_of, hardcaml]
+  end
+
+  module State_machine : sig
+    type t =
+      { memory_in : Signal.t Memory_control.I.t
+      ; program_in : Signal.t Memory_control.I.t
+      ; stack_in : Signal.t Memory_control.I.t
+      ; memory_out : Always.Variable.t Memory_control.O.t
+      ; program_out : Always.Variable.t Memory_control.O.t
+      ; stack_out : Always.Variable.t Memory_control.O.t
+      ; zinc_registers : Always.Variable.t Zinc_register.t
+      ; command_registers : Command_register.t
+      }
+
+    val initial_state : reg_spec:Reg_spec.t -> Signal.t I.t -> t
+
+    val create
+      :  instruction:Interp.sp_st
+      -> reg_spec:Reg_spec.t
+      -> enable:Signal.t
+      -> t
+      -> Always.t * Always.Variable.t
   end
 
   val compile : Interp.sp_st -> Signal.t Interface.Create_fn(I)(O).t

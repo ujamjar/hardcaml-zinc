@@ -52,13 +52,14 @@ let create instr =
     else []
   in
   let display_height =
-    7
+    9
     + (List.length zinc_registers * 3)
     + (List.length uses.write_memories * 10)
     + (List.length uses.read_memories * 10)
   in
   ( [ [ Rule.port_name_is "clock" ~wave_format:Bit
       ; Rule.port_name_is "state" ~wave_format:Unsigned_int
+      ; Rule.port_name_is "done" ~wave_format:Bit
       ]
     ; List.map zinc_registers ~f:(fun r ->
           Rule.port_name_is
