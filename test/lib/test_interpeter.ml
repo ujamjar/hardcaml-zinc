@@ -44,16 +44,28 @@ module Software_interpreter = struct
   ;;
 end
 
-let%expect_test "hello world" =
-  let bytecode_file = "../examples/helloworld.bc" in
-  let args = [] in
+let run ?(trace = 0) ?(num_instructions = -1) ?(mem_size_kb = 16384) ~bytecode_file args =
   Software_interpreter.(
     run
-      ~trace:0
+      ~trace
       { bytecode_file
-      ; num_instructions = -1
-      ; mem_size_kb = 16384
+      ; num_instructions
+      ; mem_size_kb
       ; argv = bytecode_file, bytecode_file :: args |> Array.of_list
-      });
+      })
+;;
+
+let%expect_test "hello world" =
+  run ~bytecode_file:"../examples/helloworld.bc" [];
   [%expect {| Hello world! |}]
 ;;
+
+let%expect_test "runtime" =
+  run ~bytecode_file:"../examples/runtime.bc" [];
+  [%expect {|
+    backend_type bytecode
+    word_size 64
+    int_size 63 |}]
+;;
+
+(* let%expect_test "arithmetic" = run ~bytecode_file:"../examples/arithmetic.bc" [] *)

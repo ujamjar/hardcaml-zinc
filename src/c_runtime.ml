@@ -49,13 +49,23 @@ type std_exn =
 open Ops.Int64
 include Mlvalues.Make (Ops.Int64)
 
+(* global run time state that must be initialized on each run.
+
+   we need to make this easier to work with.
+ *)
+
 (* maintain a small seperate heap section of c-allocation *)
 let c_heap_address = ref 0
 let c_heap_address_max = ref 0
+let oo_id = ref 1L
+let file_descrs = ref []
+let argv = ref ("hardcamlzinc", [| "hardcamlzinc" |])
 
 let init addr size =
   c_heap_address := addr / 8;
-  c_heap_address_max := !c_heap_address + (size / 8)
+  c_heap_address_max := !c_heap_address + (size / 8);
+  oo_id := 1L;
+  file_descrs := []
 ;;
 
 let bump size =
@@ -220,16 +230,15 @@ let caml_update_dummy =
 ;;
 
 let caml_fresh_oo_id, caml_set_oo_id =
-  let c = ref 1L in
   ( C1
       (fun _ _ ->
-        let oo_id = !c in
-        c := !c +: 2L;
-        Ok oo_id)
+        let id = !oo_id in
+        oo_id := !oo_id +: 2L;
+        Ok id)
   , C1
       (fun st ptr ->
-        set_field st ptr 1 !c;
-        c := !c +: 2L;
+        set_field st ptr 1 !oo_id;
+        oo_id := !oo_id +: 2L;
         Ok ptr) )
 ;;
 
@@ -243,7 +252,6 @@ let caml_int64_float_of_bits =
       Ok p)
 ;;
 
-let file_descrs = ref []
 let add_descr fd chan ptr = file_descrs := (fd, (chan, ptr)) :: !file_descrs
 
 let remove_descr fd =
@@ -475,14 +483,10 @@ let caml_ml_input_int =
 ;;
 
 let caml_input_value =
-  (*let cnt = ref 0 in*)
   C1
     (fun st ic ->
       let chan = find_chan_in st ic in
       let p = alloc_block_from st (input_value chan) in
-      (*let f = open_out ("value.txt" ^ string_of_int !cnt) in
-    let () = Trace.root f st.memory p in
-    let () = close_out f; incr cnt in*)
       Ok p)
 ;;
 
@@ -584,7 +588,6 @@ let caml_string_compare =
   C2 (fun st s1 s2 -> Ok (val_int (Int64.of_int (string_compare st s1 s2))))
 ;;
 
-let argv = ref ("hardcamlzinc", [| "hardcamlzinc" |])
 let caml_sys_get_argv = C1 (fun st _ -> Ok (alloc_block_from st !argv))
 let caml_sys_get_config = C1 (fun st _ -> Ok (alloc_block_from st ("Unix", 64, false)))
 
@@ -596,6 +599,8 @@ let caml_sys_getenv =
       | Some e -> Ok (alloc_block_from st e)
       | None -> caml_raise_not_found st)
 ;;
+
+let caml_sys_executable_name = C1 (fun st _ -> Ok (alloc_block_from st (fst !argv)))
 
 let caml_make_vect =
   C2
@@ -1104,6 +1109,7 @@ let c_calls =
   ; "caml_ml_seek_in", caml_ml_seek_in
   ; "caml_ml_seek_out", caml_ml_seek_out
   ; "caml_create_string", caml_create_string
+  ; "caml_create_bytes", caml_create_string
   ; "caml_blit_string", caml_blit_string
   ; "caml_fill_string", caml_fill_string
   ; "caml_string_equal", caml_string_equal
@@ -1114,6 +1120,10 @@ let c_calls =
   ; "caml_sys_open", caml_sys_open
   ; "caml_sys_get_argv", caml_sys_get_argv
   ; "caml_sys_get_config", caml_sys_get_config
+  ; "caml_sys_executable_name", caml_sys_executable_name
+  ; "caml_sys_const_backend_type", c1_int 1L
+  ; "caml_sys_const_int_size", c1_int 63L
+  ; "caml_sys_const_max_wosize", c1_int Int64.(shift_left 1L 54 - 1L)
   ; "caml_sys_const_big_endian", c1_false
   ; "caml_sys_const_word_size", c1_int 64L
   ; "caml_sys_const_ostype_unix", c1_true

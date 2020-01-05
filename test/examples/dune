@@ -1,4 +1,4 @@
-(executable
-  (name helloworld)
+(executables
+  (names helloworld arithmetic runtime)
   (modes byte)
   )
